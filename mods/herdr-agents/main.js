@@ -10,7 +10,7 @@ import { buildTree, isAgent, splitAddress } from "./lib/tree.js";
 import { PS_ARGS, parsePs, withRates, coarseTimes, childIndex, treeUsage } from "./lib/ps.js";
 import { DIR_SCRIPT, telemetryDir, isTelemetryFile, parseTelemetry, matchTelemetry, shortModel, contextLevel, limitPercent } from "./lib/telemetry.js";
 import { REPO_ARGS, prArgs, parseRepo, pickPr, folderLabel, tilde } from "./lib/git.js";
-import { cpuText, memText, costText, percentText, fitColumns } from "./lib/format.js";
+import { cpuText, memText, costText, percentText, fitColumns, prText, prNote, countWidth } from "./lib/format.js";
 import { demoData } from "./demo.js";
 
 // How often things are asked, in ms. Process figures: `refresh` in props (seconds).
@@ -46,6 +46,9 @@ const newStore = () => ({
 });
 const STORE = newStore();
 const URGENCY = { blocked: 4, done: 3, working: 2, idle: 1, unknown: 0 };
+// The top bar's counts in display order; in a narrow bar the least urgent go first.
+const COUNTED = ["blocked", "working", "done", "idle", "unknown"];
+const WORD_WIDTH = 44; // "Agents" in the top bar
 
 // Table columns in display order. `rank`: 1 is given up last when the block is narrow.
 const COLUMNS = [
@@ -53,7 +56,7 @@ const COLUMNS = [
   { key: "tab", label: "tab", width: 96, rank: 13 },
   { key: "folder", label: "folder", width: 150, rank: 10 },
   { key: "branch", label: "branch", width: 136, rank: 3 },
-  { key: "pr", label: "PR", width: 50, rank: 7 },
+  { key: "pr", label: "PR", width: 58, rank: 7 },
   { key: "cpu", label: "CPU", width: 44, rank: 5, right: true },
   { key: "mem", label: "mem", width: 44, rank: 6, right: true },
   { key: "model", label: "model", width: 92, rank: 4 },
@@ -87,7 +90,7 @@ function cellText(row, key) {
     case "tab": return row.where;
     case "folder": return row.folder.detail ? `${row.folder.main} › ${row.folder.detail}` : row.folder.main;
     case "branch": return row.branch ?? "";
-    case "pr": return row.pr && row.pr.state !== "closed" ? `#${row.pr.number}` : "";
+    case "pr": return prText(row.pr);
     case "cpu": return cpuText(row.usage?.cpu);
     case "mem": return memText(row.usage?.rss);
     case "model": return shortModel(row.tele?.model);
@@ -518,7 +521,7 @@ export default class HerdrAgents extends View {
           pr,
           usage,
           tele: telemetry.get(row.address) ?? null,
-          tip: [`${terminal.program?.name ?? "agent"} · ${row.address}`, cwd ? tilde(cwd, house) : null, terminal.report?.msg].filter(Boolean).join("\n"),
+          tip: [`${terminal.program?.name ?? "agent"} · ${row.address}`, cwd ? tilde(cwd, house) : null, [branch, prNote(pr)].filter(Boolean).join(" · "), terminal.report?.msg].filter(Boolean).join("\n"),
         };
       }),
     }));
@@ -628,10 +631,15 @@ export default class HerdrAgents extends View {
     if (column.key === "status") {
       return h_flex().w(column.width).flex_none().gap(7).items_center().child(this.dot(t, row.status)).child(div().truncate().text_color(this.cellColor(t, row, "status")).child(text));
     }
-    if (column.key === "pr" && row.pr?.url && text) {
-      return box.cursor_pointer().tooltip(row.pr.title || row.pr.url).hover((el) => el.text_color(t.foreground))
-        .on_click((_event, cx) => { cx.stop_propagation(); cx.open_url(row.pr.url); })
-        .child(row.pr.state === "merged" ? `${text} ✓` : text);
+    if (column.key === "pr" && text) {
+      // The merged mark stands outside the number, so a long number cannot cut it off.
+      const cellBox = h_flex().id(`${column.key}-${row.address}`).w(column.width).flex_none().gap(4).text_color(this.cellColor(t, row, "pr"))
+        .tooltip([prNote(row.pr), row.pr.title].filter(Boolean).join("\n"))
+        .child(div().min_w(0).truncate().child(text))
+        .when(row.pr.state === "merged", (el) => el.child(div().flex_none().child("✓")));
+      if (!row.pr.url) return cellBox;
+      return cellBox.cursor_pointer().hover((el) => el.text_color(t.foreground))
+        .on_click((_event, cx) => { cx.stop_propagation(); cx.open_url(row.pr.url); });
     }
     return box.when(column.right, (el) => el.text_right()).when(text.length > 12, (el) => el.tooltip(text)).child(text);
   }
@@ -650,15 +658,15 @@ export default class HerdrAgents extends View {
       .child(h_flex().id(`name-${row.address}`).flex_1().min_w(0).self_stretch().gap(6).items_center().tooltip(row.tip)
         .children(this.lead(t, row))
         .child(div().min_w(0).truncate().text_color(row.status === "idle" ? t.muted : t.foreground).child(row.name))
-        .when(row.title, (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(row.title)))
-        .when(row.kids, (el) => el.child(this.fold(t, row))))
+        .when(row.kids, (el) => el.child(this.fold(t, row)))
+        .when(row.title, (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(row.title))))
       .children(columns.map((column) => this.cell(t, row, column)));
   }
 
   compactRow(t, row) {
     const about = [
       cellText(row, "folder"),
-      [row.branch, cellText(row, "pr")].filter(Boolean).join(" "),
+      [row.branch, cellText(row, "pr"), row.pr?.state === "merged" ? "✓" : ""].filter(Boolean).join(" "),
       [cellText(row, "model"), cellText(row, "effort")].filter(Boolean).join(" "),
       [cellText(row, "cpu"), cellText(row, "mem")].filter(Boolean).join(" "),
     ].filter(Boolean).join(" · ");
@@ -668,7 +676,7 @@ export default class HerdrAgents extends View {
       .child(v_flex().flex_1().min_w(0).py(4).gap(1)
         .child(h_flex().gap(6).items_center()
           .children(this.lead(t, row).slice(row.depth ? 1 : 0))
-          .child(div().flex_1().min_w(0).truncate().text_color(row.status === "idle" ? t.muted : t.foreground).child(row.name))
+          .child(div().min_w(0).truncate().text_color(row.status === "idle" ? t.muted : t.foreground).child(row.name))
           .when(row.kids, (el) => el.child(this.fold(t, row))))
         .when(about, (el) => el.child(div().text_size(11).text_color(t.dim).truncate().child(about))))
       .when(context, (el) => el.child(div().flex_none().text_size(11.5).text_color(this.cellColor(t, row, "context")).child(context)))
@@ -688,7 +696,7 @@ export default class HerdrAgents extends View {
       .when(group.machine, (el) => el.child(div().flex_none().px(5).rounded(4).bg(t.raised).text_color(t.muted).child(group.machine)));
   }
 
-  topBar(t, model, wide) {
+  topBar(t, model, mode, width) {
     const count = {};
     // Agents folded away count too: one of them may need the person.
     for (const status of model.rows.flatMap((row) => [row.status, ...row.hidden])) count[status] = (count[status] ?? 0) + 1;
@@ -696,12 +704,18 @@ export default class HerdrAgents extends View {
     const rss = model.rows.reduce((sum, row) => sum + (row.usage?.rss ?? 0), 0);
     const cost = model.rows.reduce((sum, row) => sum + (row.tele?.cost ?? 0), 0);
     const totals = [rss ? `CPU ${cpuText(cpu)}` : "", rss ? memText(rss) : "", cost ? costText(cost) : ""].filter(Boolean).join("  ·  ");
-    return h_flex().h(36).flex_none().px(14).gap(12).items_center().text_size(11.5)
-      .child(div().font_medium().text_color(t.muted).child("Agents"))
-      .children(["blocked", "working", "done", "idle"].filter((status) => count[status]).map((status) =>
+    // What the bar has room for: the counts first, the most urgent longest, then the word.
+    const gap = 12;
+    const room = width - 28;
+    const counts = COUNTED.filter((status) => count[status]).map((status) => ({ key: status, width: countWidth(count[status]), rank: -URGENCY[status] }));
+    const kept = fitColumns(counts, room, gap);
+    const used = kept.reduce((sum, status) => sum + countWidth(count[status]) + gap, 0);
+    return h_flex().h(36).flex_none().px(14).gap(gap).items_center().overflow_hidden().text_size(11.5)
+      .when(used + WORD_WIDTH <= room, (el) => el.child(div().flex_none().font_medium().text_color(t.muted).child("Agents")))
+      .children(kept.map((status) =>
         h_flex().flex_none().gap(5).items_center().child(this.dot(t, status)).child(div().text_color(t.dim).child(String(count[status])))))
       .child(div().flex_1())
-      .when(wide && totals, (el) => el.child(div().flex_none().text_color(t.dim).child(totals)));
+      .when(mode === "table" && totals, (el) => el.child(div().flex_none().text_color(t.dim).child(totals)));
   }
 
   render() {
@@ -742,7 +756,7 @@ export default class HerdrAgents extends View {
         if (first && props()?.overlay) this.handle.focus();
         cx.notify();
       })
-      .when(mode !== "rail", (el) => el.child(this.topBar(t, model, mode === "table")))
+      .when(mode !== "rail", (el) => el.child(this.topBar(t, model, mode, width)))
       .when(mode === "table" && model.rows.length > 0, (el) => el.child(
         h_flex().h(20).flex_none().mx(6).px(8).gap(GAP).items_center().text_size(10.5).text_color(t.dim)
           .child(div().flex_1().min_w(0).child("agent"))

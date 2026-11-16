@@ -43,3 +43,16 @@ export function fitColumns(columns, room, gap = 0) {
   }
   return columns.filter((column) => kept.has(column.key)).map((column) => column.key);
 }
+
+/** A pull request as column text: "#128"; nothing for none or a closed one. */
+export function prText(pr) {
+  return pr && pr.state !== "closed" ? `#${pr.number}` : "";
+}
+
+/** A pull request in words, for a tip: "#128 merged". */
+export function prNote(pr) {
+  return pr ? `#${pr.number} ${pr.state}` : "";
+}
+
+/** How wide a status count in the top bar is, in px: its dot, a gap and the digits. */
+export const countWidth = (count) => 13 + 7 * String(count).length;

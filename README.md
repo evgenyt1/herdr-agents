@@ -4,6 +4,8 @@ A mod for [Herdr.app](https://herdr.dev): every agent terminal as one row, on ev
 Herdr knows. It works by itself, and shows more when
 [agent-telemetry](https://github.com/evgenyt1/agent-telemetry) files are present.
 
+![The table: nine made-up agents in three spaces](preview.png)
+
 ## What it shows
 
 One row for each terminal Herdr calls an agent (Claude Code, Codex, pi, any program that
@@ -33,6 +35,8 @@ With agent-telemetry, for each terminal a file matches:
 A column nobody has anything for is left out, so without telemetry files there are no telemetry
 columns. In a narrow block the least important columns go first; under 520 px each agent takes
 two lines; under 110 px only the status dots stay.
+
+![Two narrow copies and a rail](docs/narrow.png)
 
 Click a row, or press Enter on it, to go to that agent. Arrows or `j` / `k` move, Left and
 Right fold and unfold an agent's sub-agents. A folded agent says how many it hides, in the
@@ -112,7 +116,7 @@ BusyBox), CPU and memory stay empty.
 ```sh
 node --test                           # tree building, telemetry, ps and git parsing
 herdr-app check mods/herdr-agents     # the mod loads and renders (with no agents)
-./scripts/check-renders.sh            # the same with the demo's rows, at four widths
+./scripts/check-renders.sh            # the same with the demo's rows, at six widths
 ./install.sh                          # then look at it in Herdr
 ```
 

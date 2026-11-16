@@ -3,7 +3,8 @@
 
 import { parsePs } from "./lib/ps.js";
 
-const program = (key, name) => ({ key, name, icon: `icons/${key}.svg`, tint: key !== "claude", tile: null, color: null, shell: false, agent: true });
+// Pictures (claude, codex) are drawn as they are; a one-color glyph (pi) takes the text color.
+const program = (key, name) => ({ key, name, icon: `icons/${key}.svg`, tint: key === "pi", tile: null, color: null, shell: false, agent: true });
 const CLAUDE = program("claude", "Claude Code");
 const CODEX = program("codex", "Codex");
 const PI = program("pi", "pi");

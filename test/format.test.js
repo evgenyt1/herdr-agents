@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cpuText, memText, costText, percentText, fitColumns } from "../mods/herdr-agents/lib/format.js";
+import { cpuText, memText, costText, percentText, fitColumns, prText, prNote, countWidth } from "../mods/herdr-agents/lib/format.js";
 
 test("cpuText", () => {
   assert.deepEqual([0, 0.04, 0.5, 3.24, 9.96, 45.4, 145.2, null, undefined].map(cpuText), ["0%", "0%", "0.5%", "3.2%", "10%", "45%", "145%", "", ""]);
@@ -26,4 +26,28 @@ test("fitColumns keeps the most important columns that fit, in display order", (
   assert.deepEqual(fitColumns(columns, 169, 10), ["b", "c"]);
   assert.deepEqual(fitColumns(columns, 50, 10), ["b"]);
   assert.deepEqual(fitColumns(columns, 49, 10), []);
+});
+
+test("prText: the number; nothing for none or a closed one", () => {
+  const pr = (state) => ({ number: 126, state, url: null, title: "" });
+  assert.deepEqual(["open", "draft", "merged", "closed"].map((state) => prText(pr(state))), ["#126", "#126", "#126", ""]);
+  assert.equal(prText(null), "");
+});
+
+test("prNote says the state", () => {
+  assert.equal(prNote({ number: 126, state: "merged" }), "#126 merged");
+  assert.equal(prNote(null), "");
+});
+
+test("status counts in a narrow top bar: the least urgent go first", () => {
+  // As the view ranks them: blocked, done, working, idle, unknown.
+  const counts = [["blocked", 1, 1], ["working", 3, 3], ["done", 1, 2], ["idle", 12, 4], ["unknown", 2, 5]]
+    .map(([key, count, rank]) => ({ key, width: countWidth(count), rank }));
+  assert.equal(countWidth(4), 20);
+  assert.equal(countWidth(12), 27);
+  assert.deepEqual(fitColumns(counts, 400, 12), ["blocked", "working", "done", "idle", "unknown"]);
+  // Three counts of one digit need 20 + 32 + 32 px.
+  assert.deepEqual(fitColumns(counts, 84, 12), ["blocked", "working", "done"]);
+  assert.deepEqual(fitColumns(counts, 110 - 28, 12), ["blocked", "done"]);
+  assert.deepEqual(fitColumns(counts, 30, 12), ["blocked"]);
 });

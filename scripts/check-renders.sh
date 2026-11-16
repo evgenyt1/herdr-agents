@@ -11,7 +11,7 @@ trap 'rm -rf "$work"' EXIT
 
 herdr-app check "$source"
 
-for width in 1400 700 300 60; do
+for width in 1400 700 300 200 120 60; do
   copy="$work/herdr-agents-$width"
   mkdir "$copy"
   cp -R "$source/main.js" "$source/mod.json" "$source/demo.js" "$source/lib" "$copy/"
