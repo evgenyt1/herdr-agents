@@ -11,7 +11,7 @@ import { PS_ARGS, parsePs, withRates, coarseTimes, childIndex, treeUsage } from 
 import { DIR_SCRIPT, telemetryDir, isTelemetryFile, parseTelemetry, matchTelemetry, shortModel, modelEffort, limitPercent } from "./lib/telemetry.js";
 import { REPO_ARGS, STATUS_ARGS, prArgs, parseRepo, parseStatus, statusParts, statusText, statusNote, codeArgs, sshTarget, pickPr, folderLabel, tilde } from "./lib/git.js";
 import { cpuText, memText, costText, percentText, fitColumns, prText, prNote, countWidth } from "./lib/format.js";
-import { COLUMNS, parseWidths, fitted, dragged } from "./lib/columns.js";
+import { NAME, COLUMNS, clampWidth, parseWidths, sized, dragged, tableWidth, parseShown, shownKeys } from "./lib/columns.js";
 import { heat, percentLevel, modelLevel, effortLevel } from "./lib/colors.js";
 import { demoData } from "./demo.js";
 
@@ -36,6 +36,7 @@ const CPU_SPAN_MS = 20000; // CPU is the load over about this long
 const CPU_SPAN_COARSE_MS = 60000; // where ps counts CPU time in whole seconds (Linux)
 const PUBLISH_MS = 120; // jobs ending close together are drawn once
 const JOB_LOST_MS = 120000; // a job that has not come back by then is given up on
+const HOLD_MS = 30000; // just opened: the columns of the last time stay until the readings are in, this long at most
 
 // Processes, branches and pull requests as read from the machines. Plain data, shared by every
 // copy of the mod and kept while the app runs: opened over the window a second time, the
@@ -51,6 +52,7 @@ const newStore = () => ({
   prs: new Map(), // machine \n git folder \n branch -> { pr, at, asked }
   ghOff: new Map(), // machine -> when to try gh again
   homes: new Map(), // another machine -> its home folder
+  tele: new Map(), // telemetry folder as given in props ("": the machine's own) -> { records, files }
 });
 const STORE = newStore();
 const URGENCY = { blocked: 4, done: 3, working: 2, idle: 1, unknown: 0 };
@@ -59,7 +61,7 @@ const COUNTED = ["blocked", "working", "done", "idle", "unknown"];
 const WORD_WIDTH = 44; // "Agents" in the top bar
 
 const GAP = 12;
-const NAME_MIN = 190;
+const EDGE = 28; // a row's margins and padding, left and right together
 const STATUS_WORD = { working: "working", blocked: "needs you", done: "done", idle: "idle", unknown: "" };
 // The theme color of each mark in the git column.
 const GIT_COLOR = { conflicts: "ansi1", staged: "ansi2", modified: "ansi3", untracked: "ansi4", ahead: "ansi6", behind: "ansi5", clean: "ansi2" };
@@ -71,6 +73,16 @@ async function pool(items, size, work) {
     while (next < items.length) await work(items[next++]);
   };
   await Promise.all(Array.from({ length: Math.min(size, items.length) }, lane));
+}
+
+/** A stored size (JSON text) -> { width, height }, or null. */
+function parseSize(text) {
+  try {
+    const size = JSON.parse(text);
+    return size?.width > 0 && size?.height > 0 ? { width: size.width, height: size.height } : null;
+  } catch {
+    return null;
+  }
 }
 
 const cwdOf = (terminal) => terminal?.foreground?.cwd ?? terminal?.cwd ?? null;
@@ -100,23 +112,35 @@ function cellText(row, key) {
 export default class HerdrAgents extends View {
   init(_props, cx) {
     const given = props() ?? {};
-    this.size = null;
+    this.size = this.stored("size", parseSize); // as last time, so the first frame is laid out as the next ones
+    this.sizeKept = JSON.stringify(this.size);
+    this.laid = false; // whether Herdr has said how big this copy is
+    this.opened = Date.now();
+    this.settled = false; // whether this copy's first readings are all in
+    this.teleRead = false;
     this.folded = new Set();
     this.cursor = null;
     this.here = undefined; // the agent the person is in, as last seen
     this.reveal = null;
     this.lines = [];
     this.widths = {}; // column -> px, as the person dragged them
-    this.drag = null; // { key, x, width, now, most, shown } while a column's border is held
+    this.drag = null; // { key, min, x, width, now } while a column's divider is held
+    this.fit = null; // { key, turn } while a column is measured to fit what is in it
+    this.turn = 0;
     this.last = null; // the rows as last drawn
     this.loadWidths();
+    // The columns shown the last time: they are there from the first frame, before the readings.
+    this.remembered = this.stored("shown", parseShown) ?? [];
+    this.shownKept = JSON.stringify(this.remembered);
     this.handle = cx.focus_handle();
     this.scroll = ScrollHandle.new();
     this.running = new Map(); // job -> when it started
     this.data = STORE;
-    // Telemetry is this copy's own: `telemetryDir` in props may point each copy somewhere else.
-    this.records = new Map(); // machine -> telemetry records
-    this.files = new Map(); // this machine's telemetry files: name -> record
+    // Telemetry is kept by folder, as `telemetryDir` in props may point a copy somewhere else:
+    // a copy opened again starts from what the last one read, not from nothing.
+    const folder = String(given.telemetryDir ?? "");
+    if (!STORE.tele.has(folder)) STORE.tele.set(folder, { records: new Map(), files: new Map() });
+    this.tele = STORE.tele.get(folder); // records: machine -> telemetry records; files: this machine's, name -> record
     this.asked = new Set(); // pids a process reading was already asked for
     this.pending = false;
     this.teleAt = new Map();
@@ -136,7 +160,8 @@ export default class HerdrAgents extends View {
       this.demo = demo;
       this.data = newStore();
       for (const [machine, table] of demo.procs) this.data.procs.set(machine, { table, index: childIndex(table), at: 0 });
-      this.records = demo.records;
+      this.tele = { records: demo.records, files: new Map() };
+      this.settled = true;
       this.data.repos = demo.repos;
       this.data.reach = demo.reach;
       this.data.prs = demo.prs;
@@ -182,11 +207,17 @@ export default class HerdrAgents extends View {
       } finally {
         if (this.running.get(name) === started) this.running.delete(name);
       }
-      if (changed) this.later(cx);
+      if (this.settle() || changed) this.later(cx);
     });
   }
 
   /** Redraws shortly, once, however many jobs asked: building the rows is the costly part. */
+  /** Whether the first readings have just all come in: from here on an empty column goes. */
+  settle() {
+    if (this.settled || !this.teleRead || this.running.size) return false;
+    return (this.settled = true);
+  }
+
   later(cx) {
     if (this.pending) return;
     this.pending = true;
@@ -216,6 +247,7 @@ export default class HerdrAgents extends View {
     const widths = JSON.stringify(this.widths);
     if (!this.drag) this.loadWidths();
     if (widths !== JSON.stringify(this.widths)) cx.notify();
+    this.keepSize();
     for (const key of this.data.procs.keys()) {
       if (machines.some((machine) => (machine ?? "") === key)) continue;
       this.data.procs.delete(key);
@@ -461,8 +493,8 @@ export default class HerdrAgents extends View {
     if (!names) return;
     const files = new Map();
     await Promise.all(names.filter(isTelemetryFile).map((name) => this.readFile(machine, dir, name, files)));
-    if (!machine) this.files = files;
-    this.records.set(machine ?? "", [...files.values()]);
+    if (!machine) this.tele.files = files;
+    this.tele.records.set(machine ?? "", [...files.values()]);
   }
 
   async readFile(machine, dir, name, files) {
@@ -487,8 +519,8 @@ export default class HerdrAgents extends View {
       // changed to list) means read it all.
       else if (!name.startsWith(".")) return this.readTelemetry(null, dir);
     }
-    await Promise.all([...names].map((name) => this.readFile(null, dir, name, this.files)));
-    this.records.set("", [...this.files.values()]);
+    await Promise.all([...names].map((name) => this.readFile(null, dir, name, this.tele.files)));
+    this.tele.records.set("", [...this.tele.files.values()]);
   }
 
   async readRemoteTelemetry(machine) {
@@ -515,10 +547,12 @@ export default class HerdrAgents extends View {
       for (;;) {
         const read = changed ? this.readChanged(dir, changed) : this.readTelemetry(null, dir);
         await read.catch((error) => console.warn(`herdr-agents: telemetry: ${error}`));
+        this.teleRead = true;
+        this.settle();
         // A session that has just started is not in the last process reading yet, and a file
         // whose process is not running is skipped: read the processes again, once for each
         // new pid (a file left by a crashed session keeps its dead pid for good).
-        const pids = (this.records.get("") ?? []).map((record) => record.pid).filter((pid) => pid != null);
+        const pids = (this.tele.records.get("") ?? []).map((record) => record.pid).filter((pid) => pid != null);
         const table = this.data.procs.get("")?.table;
         const fresh = pids.filter((pid) => !this.asked.has(pid) && table && !table.has(pid));
         this.asked = new Set(pids.filter((pid) => this.asked.has(pid) || fresh.includes(pid)));
@@ -564,7 +598,7 @@ export default class HerdrAgents extends View {
       // Another machine without a process reading is away, or not read yet: its files cannot
       // be told live from left behind, so they wait. (Here, no reading means no ps at all.)
       if (key && !table) continue;
-      for (const [address, record] of matchTelemetry(list, this.records.get(key), table)) telemetry.set(address, record);
+      for (const [address, record] of matchTelemetry(list, this.tele.records.get(key), table)) telemetry.set(address, record);
     }
 
     const groups = tree.groups.map((group) => ({
@@ -611,7 +645,7 @@ export default class HerdrAgents extends View {
 
   /** Everything a redraw would show differently, as one string. */
   digest(model) {
-    return model.rows.map((row) => [row.address, row.depth, row.name, row.title, ...COLUMNS.map((column) => cellText(row, column.key)), row.pr?.state ?? "", row.open?.host ?? (row.open ? "here" : ""), row.hidden.join(",")].join("\t")).join("\n");
+    return this.shownColumns(model).join(",") + "\n" + model.rows.map((row) => [row.address, row.depth, row.name, row.title, ...COLUMNS.map((column) => cellText(row, column.key)), row.pr?.state ?? "", row.open?.host ?? (row.open ? "here" : ""), row.hidden.join(",")].join("\t")).join("\n");
   }
 
   /** Opened over the window, the mod goes away once it has taken the person somewhere. */
@@ -629,7 +663,7 @@ export default class HerdrAgents extends View {
     cx.notify();
   }
 
-  /** Opens the row's folder in VS Code. */
+  /** Opens the row's folder in VS Code, and does nothing else: the mod stays as it is. */
   openDir(row, cx) {
     if (this.demo || !row.open) return;
     const { path, host } = row.open;
@@ -637,7 +671,6 @@ export default class HerdrAgents extends View {
       try {
         const out = await exec("code", codeArgs(path, host), { timeout: 20000 });
         if (out.code !== 0) throw new Error(out.stderr.trim() || `code ended with ${out.code}`);
-        this.leave();
       } catch (error) {
         const missing = /cannot run code\b|not found|no such file/i.test(String(error));
         notify({
@@ -659,27 +692,39 @@ export default class HerdrAgents extends View {
     this.reveal = here;
   }
 
-  // A column's left border is dragged: the columns hold to the right edge, so the border stays
-  // under the pointer, the column takes its width from the name, and no more than the name can
-  // give. While it is held, the columns shown and the other widths stay as they were.
-
-  dragStart(column, columns, spare, event, cx) {
-    cx.stop_propagation();
-    if (event.click_count >= 2) {
-      // Pressed twice: back to the column's own width.
-      this.drag = null;
-      this.storeWidth(column.key, null);
-    } else {
-      const shown = Object.fromEntries(columns.map((one) => [one.key, one.width]));
-      this.drag = { key: column.key, x: event.position.x, width: column.width, now: column.width, most: column.width + Math.max(0, spare), shown };
+  /**
+   * The columns to show, by key. Just opened, the ones shown the last time stay although the
+   * readings that fill them are not in yet: nothing comes in a moment later and moves the rest.
+   */
+  shownColumns(model) {
+    const filled = COLUMNS.filter((column) => model.rows.some((row) => cellText(row, column.key))).map((column) => column.key);
+    const holding = !this.settled && Date.now() - this.opened < HOLD_MS;
+    const keys = shownKeys(filled, this.remembered, holding);
+    const text = JSON.stringify(keys);
+    if (!holding && !this.demo && model.rows.length && text !== this.shownKept) {
+      this.shownKept = text;
+      this.keep("shown", text);
     }
+    return keys;
+  }
+
+  // The divider on a column's right edge is dragged: the table holds to the left edge, so the
+  // divider stays under the pointer and the columns right of it move along.
+
+  dragStart(column, event, cx) {
+    cx.stop_propagation();
+    this.drag = null;
+    // Pressed twice: as wide as what is in it. The column is laid out once at its natural
+    // width where nobody sees it, and `fitted` hears how wide that came out.
+    if (event.click_count >= 2) this.fit = { key: column.key, turn: ++this.turn };
+    else this.drag = { key: column.key, min: column.min, x: event.position.x, width: column.width, now: column.width };
     cx.notify();
   }
 
   dragTo(event, cx) {
     const drag = this.drag;
     if (!drag) return;
-    const width = Math.min(dragged(drag.width, event.position.x - drag.x), drag.most);
+    const width = dragged(drag.width, event.position.x - drag.x, drag.min);
     if (width === drag.now) return;
     drag.now = width;
     cx.notify();
@@ -693,11 +738,48 @@ export default class HerdrAgents extends View {
     cx.notify();
   }
 
-  /** The copy goes while a border is held (Esc over the window): what was dragged so far is kept. */
+  fitted(fit, width, cx) {
+    if (this.fit !== fit) return;
+    this.fit = null;
+    const column = fit.key === NAME.key ? NAME : COLUMNS.find((one) => one.key === fit.key);
+    // Two px to spare: a width cut to the text's own would end in an ellipsis at some zoom.
+    if (column && width > 0) this.storeWidth(column.key, clampWidth(Math.ceil(width) + 2, column.min));
+    cx.notify();
+  }
+
+  /** The copy goes while a divider is held (Esc over the window): what was dragged so far is kept. */
   close() {
     const drag = this.drag;
     this.drag = null;
     if (drag && drag.now !== drag.width) this.storeWidth(drag.key, drag.now);
+    this.keepSize();
+  }
+
+  /** A value kept in this copy's storage, read through `parse`; null when there is none. */
+  stored(key, parse) {
+    try {
+      const text = localStorage.getItem(key);
+      return text == null ? null : parse(text);
+    } catch {
+      return null;
+    }
+  }
+
+  keep(key, text) {
+    try {
+      localStorage.setItem(key, text);
+    } catch {
+      // No storage here: it lasts as long as this copy.
+    }
+  }
+
+  /** Remembers how big this copy is, for the first frame of the next time. */
+  keepSize() {
+    if (!this.laid) return;
+    const text = JSON.stringify(this.size);
+    if (text === this.sizeKept) return;
+    this.sizeKept = text;
+    this.keep("size", text);
   }
 
   loadWidths() {
@@ -713,11 +795,7 @@ export default class HerdrAgents extends View {
     this.loadWidths();
     const { [key]: _own, ...rest } = this.widths;
     this.widths = width == null ? rest : { ...rest, [key]: width };
-    try {
-      localStorage.setItem("widths", JSON.stringify(this.widths));
-    } catch {
-      // No storage here: the widths last as long as this copy.
-    }
+    this.keep("widths", JSON.stringify(this.widths));
   }
 
   toggle(address, cx) {
@@ -794,68 +872,108 @@ export default class HerdrAgents extends View {
     ].filter(Boolean);
   }
 
-  /** Folds a parent's children away; folded, it says how many are hidden and how urgent they are. */
-  fold(t, row) {
+  /**
+   * Folds a parent's children away; folded, it says how many are hidden and how urgent they are.
+   * `natural`: only its look, for measuring.
+   */
+  fold(t, row, natural = false) {
     const top = row.hidden.reduce((most, status) => (URGENCY[status] > URGENCY[most] ? status : most), "unknown");
     const color = row.folded ? (URGENCY[top] > URGENCY.idle ? t[top] : t.muted) : t.dim;
+    const mark = row.folded ? `▸ ${row.hidden.length}` : "▾";
+    if (natural) return div().flex_none().px(4).text_size(10.5).child(mark);
     return div().id(`fold-${row.address}`).flex_none().px(4).rounded(4).text_size(10.5).text_color(color).cursor_pointer()
       .hover((el) => el.bg(t.raised).text_color(t.foreground))
       .tooltip(row.folded ? "Show its agents" : "Hide its agents")
       .on_click((_event, cx) => { cx.stop_propagation(); this.toggle(row.address, cx); })
-      .child(row.folded ? `▸ ${row.hidden.length}` : "▾");
+      .child(mark);
   }
 
-  cell(t, row, column) {
+  /**
+   * The start of a row: tree lines, icon, name, fold control, title. `width` null: as wide as
+   * what is in it and nothing to press, for measuring.
+   */
+  nameCell(t, row, width) {
+    const natural = width == null;
+    const box = natural ? h_flex().flex_none() : h_flex().id(`name-${row.address}`).w(width).flex_none().min_w(0).tooltip(row.tip);
+    const cut = (el) => (natural ? el.flex_none() : el.min_w(0).truncate());
+    return box.self_stretch().gap(6).items_center()
+      .children(this.lead(t, row))
+      .child(cut(div()).text_color(row.status === "idle" ? t.muted : t.foreground).child(row.name))
+      .when(row.kids, (el) => el.child(this.fold(t, row, natural)))
+      .when(row.title, (el) => el.child((natural ? div().flex_none() : div().flex_1().min_w(0).truncate()).text_color(t.dim).child(row.title)));
+  }
+
+  /** One cell. `natural`: as wide as what is in it and nothing to press, for measuring. */
+  cell(t, row, column, natural = false) {
     const text = cellText(row, column.key);
-    const box = div().id(`${column.key}-${row.address}`).w(column.width).flex_none().truncate().text_color(this.cellColor(t, row, column.key));
+    const id = `${column.key}-${row.address}`;
+    const sized = (el) => (natural ? el.flex_none() : el.id(id).w(column.width).flex_none());
+    const cut = (el) => (natural ? el.flex_none() : el.min_w(0).truncate());
     if (column.key === "status") {
-      return h_flex().w(column.width).flex_none().gap(7).items_center().child(this.dot(t, row.status)).child(div().truncate().text_color(this.cellColor(t, row, "status")).child(text));
+      return sized(h_flex()).gap(7).items_center().child(this.dot(t, row.status)).child(cut(div()).text_color(this.cellColor(t, row, "status")).child(text));
     }
     if (column.key === "pr" && text) {
       // The merged mark stands outside the number, so a long number cannot cut it off.
-      const cellBox = h_flex().id(`${column.key}-${row.address}`).w(column.width).flex_none().gap(4).text_color(this.cellColor(t, row, "pr"))
-        .tooltip([prNote(row.pr), row.pr.title].filter(Boolean).join("\n"))
-        .child(div().min_w(0).truncate().child(text))
+      const box = sized(h_flex()).gap(4).text_color(this.cellColor(t, row, "pr"))
+        .child(cut(div()).child(text))
         .when(row.pr.state === "merged", (el) => el.child(div().flex_none().child("✓")));
-      if (!row.pr.url) return cellBox;
-      return cellBox.cursor_pointer().hover((el) => el.text_color(t.foreground))
+      if (natural) return box;
+      const tipped = box.tooltip([prNote(row.pr), row.pr.title].filter(Boolean).join("\n"));
+      if (!row.pr.url) return tipped;
+      return tipped.cursor_pointer().hover((el) => el.text_color(t.foreground))
         .on_click((_event, cx) => { cx.stop_propagation(); cx.open_url(row.pr.url); });
     }
     if (column.key === "model" && text) {
       // The model and the effort each have a color of their own.
       const model = shortModel(row.tele.model);
       const effort = row.tele.effort;
-      return h_flex().id(`${column.key}-${row.address}`).w(column.width).flex_none().overflow_hidden().tooltip(text)
-        .when(model, (el) => el.child(div().min_w(0).truncate().text_color(this.cellColor(t, row, "model")).child(model)))
+      return sized(h_flex())
+        .when(!natural, (el) => el.overflow_hidden().tooltip(text))
+        .when(model, (el) => el.child(cut(div()).text_color(this.cellColor(t, row, "model")).child(model)))
         .when(model && effort, (el) => el.child(div().flex_none().text_color(t.dim).child("/")))
         .when(effort, (el) => el.child(div().flex_none().text_color(this.cellColor(t, row, "effort")).child(effort)));
     }
     if (column.key === "git" && text) {
-      return h_flex().id(`${column.key}-${row.address}`).w(column.width).flex_none().gap(5).overflow_hidden().tooltip(statusNote(row.git))
+      return sized(h_flex()).gap(5)
+        .when(!natural, (el) => el.overflow_hidden().tooltip(statusNote(row.git)))
         .children(statusParts(row.git).map((part) => div().flex_none().text_color(t[GIT_COLOR[part.kind]] ?? t.dim).child(part.text)));
     }
+    const box = sized(div()).text_color(this.cellColor(t, row, column.key));
+    if (natural) return box.child(text);
     if (column.key === "dir" && text && row.open) {
       // A link: the folder opens in VS Code.
-      return box.cursor_pointer().hover((el) => el.underline().text_color(t.foreground))
+      return box.truncate().cursor_pointer().hover((el) => el.underline().text_color(t.foreground))
         .tooltip(`Open ${row.open.host ? `${row.open.host}:` : ""}${row.open.path} in VS Code`)
         .on_click((_event, cx) => { cx.stop_propagation(); this.openDir(row, cx); })
         .child(text);
     }
-    return box.when(column.right, (el) => el.text_right()).when(text.length > 12, (el) => el.tooltip(text)).child(text);
+    return box.truncate().when(column.right, (el) => el.text_right()).when(text.length > 12, (el) => el.tooltip(text)).child(text);
   }
 
-  /** The headings. In the gap before each column is its left border, to drag. */
-  headings(t, columns, spare) {
+  /** The headings. In the gap after each one is the divider on its right edge, to drag. */
+  headings(t, name, columns) {
+    const heading = (column) =>
+      div().relative().w(column.width).flex_none()
+        .child(div().truncate().when(column.right, (el) => el.text_right()).child(column.label))
+        .child(div().id(`divider-${column.key}`).absolute().right(-GAP / 2 - 4).top(-2).bottom(-2).w(9).rounded(2).cursor_col_resize()
+          .hover((el) => el.bg(t.hover))
+          .tooltip("Drag to resize, double-click to fit")
+          .on_mouse_down("left", (event, cx) => this.dragStart(column, event, cx))
+          .child(div().absolute().left(4).top(3).bottom(3).w(1).bg(this.drag?.key === column.key ? t.accent : t.border)));
     return h_flex().h(20).flex_none().mx(6).px(8).gap(GAP).items_center().text_size(10.5).text_color(t.dim)
-      .child(div().flex_1().min_w(0).child("agent"))
-      .children(columns.map((column) =>
-        div().relative().w(column.width).flex_none()
-          .child(div().truncate().when(column.right, (el) => el.text_right()).child(column.label))
-          .child(div().id(`border-${column.key}`).absolute().left(-GAP / 2 - 4).top(-2).bottom(-2).w(9).rounded(2).cursor_col_resize()
-            .hover((el) => el.bg(t.hover))
-            .tooltip("Drag to resize, double-click to reset")
-            .on_mouse_down("left", (event, cx) => this.dragStart(column, columns, spare, event, cx))
-            .child(div().absolute().left(4).top(3).bottom(3).w(1).bg(this.drag?.key === column.key ? t.accent : t.border)))));
+      .children([name, ...columns].map(heading));
+  }
+
+  /**
+   * One column laid out as wide as what is in it, heading included, where nobody sees it:
+   * `on_size_change` then says how wide that is. A new id each time, so it is a first layout.
+   */
+  measure(t, model, fit) {
+    const column = fit.key === NAME.key ? NAME : COLUMNS.find((one) => one.key === fit.key);
+    return v_flex().id(`herdr-agents-fit-${fit.key}-${fit.turn}`).absolute().left(0).top(0).opacity(0).items_start().text_size(12.5)
+      .on_size_change((size, cx) => this.fitted(fit, size.width, cx))
+      .child(div().flex_none().text_size(10.5).child(column.label))
+      .children(model.rows.map((row) => (column === NAME ? this.nameCell(t, row, null) : this.cell(t, row, column, true))));
   }
 
   rowBase(t, row) {
@@ -867,13 +985,9 @@ export default class HerdrAgents extends View {
       .on_click((_event, cx) => this.activate(row, cx));
   }
 
-  tableRow(t, row, columns) {
+  tableRow(t, row, name, columns) {
     return this.rowBase(t, row).h(26).gap(GAP)
-      .child(h_flex().id(`name-${row.address}`).flex_1().min_w(0).self_stretch().gap(6).items_center().tooltip(row.tip)
-        .children(this.lead(t, row))
-        .child(div().min_w(0).truncate().text_color(row.status === "idle" ? t.muted : t.foreground).child(row.name))
-        .when(row.kids, (el) => el.child(this.fold(t, row)))
-        .when(row.title, (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(row.title))))
+      .child(this.nameCell(t, row, name.width))
       .children(columns.map((column) => this.cell(t, row, column)));
   }
 
@@ -954,17 +1068,33 @@ export default class HerdrAgents extends View {
     // window for a moment leaves it to the list that stays.
     if (!this.demo && (given.order ?? !given.overlay)) setAgentOrder(model.order);
 
-    const width = this.size?.width ?? 640;
+    const root = v_flex().id("herdr-agents").size_full().min_h(0).bg(t[given.background] ?? (given.overlay ? t.popover : t.chrome)).text_color(t.foreground).text_size(12.5)
+      .track_focus(this.handle)
+      .on_key_down((event, cx) => this.key(event, cx))
+      .on_mouse_move((event, cx) => this.dragTo(event, cx))
+      .on_mouse_up("left", (_event, cx) => this.dragEnd(cx))
+      .on_size_change((size, cx) => {
+        const first = !this.laid;
+        this.laid = true;
+        this.size = size;
+        // Opened over the window (mod.open): the keyboard is here from the start.
+        if (first && props()?.overlay) this.handle.focus();
+        cx.notify();
+      });
+    // How big it is is not known yet, and was not kept from the last time: nothing is drawn
+    // that would have to move a frame later.
+    if (!this.size) return root;
+
+    const width = this.size.width;
     const mode = width < 110 ? "rail" : width < 520 ? "compact" : "table";
-    // A column nobody has anything for is left out: no telemetry files, no telemetry columns.
-    const filled = COLUMNS.filter((column) => model.rows.some((row) => cellText(row, column.key)));
-    const room = width - 28 - NAME_MIN - GAP;
-    // A column coming back into room a drag has freed would move the border from under the pointer.
-    const columns = drag
-      ? filled.filter((column) => column.key in drag.shown).map((column) => ({ ...column, width: column.key === drag.key ? drag.now : drag.shown[column.key] }))
-      : fitted(filled, this.widths, room, GAP);
-    // What the name has beyond its least: as much as a column can still be widened by.
-    const spare = room - columns.reduce((sum, column) => sum + column.width + GAP, -GAP);
+    // The table holds to the left edge: the name, then the columns, each as wide as it was made.
+    const live = (column) => (drag?.key === column.key ? { ...column, width: drag.now } : column);
+    const shown = new Set(this.shownColumns(model));
+    const name = live(sized([NAME], this.widths)[0]);
+    const columns = sized(COLUMNS.filter((column) => shown.has(column.key)), this.widths).map(live);
+    // Wider than the block, the table scrolls sideways; narrower, the rest stays empty.
+    const across = Math.max(width, EDGE + tableWidth(name.width, columns, GAP));
+    if (mode !== "table") this.fit = null;
 
     const lines = [];
     for (const group of model.groups) {
@@ -980,30 +1110,27 @@ export default class HerdrAgents extends View {
     const draw = (line) => {
       if (line.group) return this.groupRow(t, line.group);
       if (mode === "rail") return this.railRow(t, line.row);
-      return mode === "compact" ? this.compactRow(t, line.row) : this.tableRow(t, line.row, columns);
+      return mode === "compact" ? this.compactRow(t, line.row) : this.tableRow(t, line.row, name, columns);
     };
+    const rows = v_flex().id("herdr-agents-rows").flex_1().min_h(0).pb(8).overflow_y_scrollbar().track_scroll(this.scroll).children(lines.map(draw));
+    const none = model.rows.length === 0;
 
-    return v_flex().id("herdr-agents").size_full().min_h(0).bg(t[given.background] ?? (given.overlay ? t.popover : t.chrome)).text_color(t.foreground).text_size(12.5)
-      .track_focus(this.handle)
-      .on_key_down((event, cx) => this.key(event, cx))
-      .on_mouse_move((event, cx) => this.dragTo(event, cx))
-      .on_mouse_up("left", (_event, cx) => this.dragEnd(cx))
-      .on_size_change((size, cx) => {
-        const first = !this.size;
-        this.size = size;
-        // Opened over the window (mod.open): the keyboard is here from the start.
-        if (first && props()?.overlay) this.handle.focus();
-        cx.notify();
-      })
+    return root
       .when(mode !== "rail", (el) => el.child(this.topBar(t, model, mode, width)))
-      .when(mode === "table" && model.rows.length > 0, (el) => el.child(this.headings(t, columns, spare)))
-      .when(model.rows.length === 0 && mode !== "rail", (el) => el.child(div().px(14).py(6).text_color(t.dim).child("No agents are running.")))
-      .child(v_flex().id("herdr-agents-rows").flex_1().min_h(0).pb(8).overflow_y_scrollbar().track_scroll(this.scroll).children(lines.map(draw)))
-      // While a border is held, a sheet over everything keeps the pointer's moves and its
-      // release from the rows; a release outside the mod is not heard, so the next press ends it.
+      .when(none && mode !== "rail", (el) => el.child(div().px(14).py(6).text_color(t.dim).child("No agents are running.")))
+      .when(mode !== "table" || none, (el) => el.child(rows))
+      .when(mode === "table" && !none, (el) => el.child(
+        div().id("herdr-agents-table").flex().flex_1().min_h(0).overflow_x_scrollbar()
+          .child(v_flex().flex_none().w(across).child(this.headings(t, name, columns)).child(rows))))
+      .when(this.fit && mode === "table", (el) => el.child(this.measure(t, model, this.fit)))
+      // While a divider is held, a sheet over everything hears the pointer's moves and its
+      // release wherever it is over the mod. A release outside the mod is not heard, and a move
+      // does not say whether the button is down: so the drag ends where the pointer leaves the
+      // mod (the sheet's `on_hover`), and a press ends it too.
       .when(drag, (el) => el.child(div().id("herdr-agents-drag").absolute().inset_0().cursor_col_resize()
         .on_mouse_move((event, cx) => this.dragTo(event, cx))
         .on_mouse_up("left", (_event, cx) => this.dragEnd(cx))
+        .on_hover((over, cx) => { if (!over) this.dragEnd(cx); })
         .on_mouse_down("left", (_event, cx) => { cx.stop_propagation(); this.dragEnd(cx); })));
   }
 }

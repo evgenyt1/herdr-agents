@@ -18,7 +18,7 @@ Always:
 | agent | The terminal's name and title, with the program's icon. |
 | status | working, needs you, done or idle, in Herdr's own colors. |
 | tab | The tab it is in; a sub-agent without a pane of its own is in its parent's tab. The space is named too when the row is listed under another space. |
-| dir | The repository, then the worktree and the folder below it. Outside a repository, the path. Click it to open the folder in VS Code. |
+| dir | The repository, then the worktree and the folder below it. Outside a repository, the path. Click it to open the folder in VS Code; the list stays as it is. |
 | git | What has changed in the checkout: `+3` staged, `~1` modified, `?2` untracked, `!1` in conflict, `↑2` ahead of and `↓1` behind its upstream, `✓` when there is nothing to say. Each mark has a color. |
 | branch | The git branch there; `@abc1234` when a commit is checked out. |
 | PR | The branch's pull request: open, draft (muted) or merged (`✓`). Click it to open it. |
@@ -37,14 +37,17 @@ The colors are the theme's own green, yellow and red and what lies between them.
 
 The columns stand in this order: status, model/effort, ctx, 7d, tab, dir, git, branch, PR, CPU,
 mem, 5h, cost. A column nobody has anything for is left out, so without telemetry files there
-are no telemetry columns. In a narrow block the least important columns go first; under 520 px
-each agent takes two lines; under 110 px only the status dots stay.
+are no telemetry columns. The table starts at the left edge; in a block too narrow for it, it
+scrolls sideways, and in a wider one the rest stays empty. Under 520 px each agent takes two
+lines; under 110 px only the status dots stay.
 
-Drag the line before a column's heading to make that column wider or narrower; the name takes
-or gives the room. A double-click on the line gives the column its own width back. The widths
-are kept, for each place the mod is shown: the one opened over the window has them again the
-next time it opens. In a block too narrow for a width you gave, the column has its own width
-again.
+Drag the line at the right edge of a heading, the agent's too, to make that column wider or
+narrower; the columns right of it move along. A double-click on the line makes the column as
+wide as what is in it. The widths are kept, for each place the mod is shown: the one opened
+over the window has them again the next time it opens.
+
+The mod opens as it was: the same columns in the same places from the first frame, filled with
+what was last read, while the fresh readings come in.
 
 ![Two narrow copies and a rail](docs/narrow.png)
 
@@ -134,7 +137,7 @@ BusyBox), CPU and memory stay empty.
 ```sh
 node --test                           # tree building, telemetry, ps and git parsing, colors, columns
 herdr-app check mods/herdr-agents     # the mod loads and renders (with no agents)
-./scripts/check-renders.sh            # the same with the demo's rows, at six widths
+./scripts/check-renders.sh            # the same with the demo's rows: six widths, a held divider, a fit
 ./install.sh                          # then look at it in Herdr
 ```
 

@@ -21,9 +21,9 @@ Top to bottom, on the theme's `chrome` background (`popover` when opened over th
    bar too narrow for all of it gives up the word first, then counts, the least urgent first:
    no status, idle, working, done; blocked stays longest.
 2. **Column headings**, 20px, 10.5px `dim`, in the table layout and only when there are rows:
-   `agent`, then the columns below. In the middle of the gap before each column's heading
-   stands a 1px line (`border`), its left border, which can be dragged. With no agents, the
-   line "No agents are running." (`dim`) stands there.
+   `agent`, then the columns below. In the middle of the gap after each heading, the agent's
+   too, stands a 1px line (`border`): the divider on that column's right edge, which can be
+   dragged. With no agents, the line "No agents are running." (`dim`) stands there.
 3. **Rows**, scrolling. Each space starts with a 24px heading (11px, medium, `dim`): the space's
    name, and the machine's name in a small `raised` pill when it is another machine. Under it,
    that space's agents as a tree: an agent started by another agent sits under it, 16px further
@@ -34,7 +34,7 @@ A table row is 26px, with 12px between columns:
 
 | Column | Width | Shows | Color |
 | --- | --- | --- | --- |
-| agent | the rest, 190px at least | tree lines, the program's 14px icon (a picture as it is, a one-color glyph in `muted`), the name (the terminal's name, else its title, else its program), the fold control on a row with helpers, then the title in `dim` when it adds something | `foreground`; `muted` when idle |
+| agent | 230 (120 at least) | tree lines, the program's 14px icon (a picture as it is, a one-color glyph in `muted`), the name (the terminal's name, else its title, else its program), the fold control on a row with helpers, then the title in `dim` when it adds something | `foreground`; `muted` when idle |
 | status | 82 | an 8px dot and `working`, `needs you`, `done` or `idle` | the status color |
 | model/effort | 124 | `opus-5.5/xhigh`: the model without `claude-` and without a date stamp, its version with a dot, then `/` (`dim`) and the effort as the file gives it; either alone when the other is missing. A long model is cut, the effort is not | the model and the effort each on the green-to-red scale below; `muted` when not known |
 | ctx | 38, right | percent of the context window used | the scale: 0 green, 50 yellow, 100 red |
@@ -60,11 +60,25 @@ three quarters orange).
 - An effort: `low` (and `minimal`, `none`) 0, `medium` 0.25, `high` 0.5, `xhigh` 0.75, `max` 1.
 
 A column no agent has anything for is left out: without telemetry files the five telemetry
-columns are not there. When the block is too narrow for all of them, columns go in this order,
-first to go first: 5h, cost, tab, mem, CPU, PR, git, dir, branch, 7d, ctx, model/effort; status
-goes last. A column that does not fit as wide as the person made it is tried at its own width
-before it is given up, so a width set in a wide block cannot hide the column, or the border
-that would put it back, in a narrow one.
+columns are not there.
+
+The table holds to the left edge: the name, then each column at its width, 12px between them.
+All of them at their own widths take 1396px. In a wider block the rest stays empty at the
+right; in a narrower one the headings and rows scroll sideways together (the top bar stays),
+with a scrollbar along the bottom. No column is dropped for want of room.
+
+**The first frame is the settled one.** Nothing may move after the mod has opened:
+
+- What was read is kept by the module, not by the copy: processes, git, pull requests, and the
+  telemetry records (by telemetry folder). A copy opened again draws its first frame from
+  them, then reads afresh.
+- The keys of the columns shown are kept in `localStorage` (`shown`). Until a copy's first
+  readings are all in (30 s at most), the columns of the last time stay, empty if need be;
+  after that an empty column goes. So after Herdr starts, or the mod's code is loaded again,
+  the columns stand where they will be and fill in.
+- The copy's size is kept there too (`size`), and the first frame is laid out for it; a copy
+  with no size kept draws only its background until Herdr has told it its size.
+- Widths are read before the first frame, and no width depends on what is in the cells.
 
 Under 520px wide the rows become two lines: icon, name and, right after the name, the fold
 control above; folder (a link, as the dir cell is), branch with the git marks (none for a clean checkout) and pull request
@@ -92,9 +106,9 @@ status dots, 24px each, no headings.
   working), and hidden agents still count in the top bar.
 - **Click a pull request number**: it opens in the browser. Hovering it shows `#126 merged` and
   its title.
-- **Click the dir cell**: the agent's folder opens in VS Code (`code <folder>`); the rest of
-  the row keeps its own click. Opened over the window, the mod then closes, like after a row
-  click. On another machine the folder opens over ssh (`code --remote ssh-remote+<target>
+- **Click the dir cell**: the agent's folder opens in VS Code (`code <folder>`) and nothing
+  else happens: Herdr does not go to the agent, and the mod stays open, over the window too.
+  The rest of the row keeps its own click. On another machine the folder opens over ssh (`code --remote ssh-remote+<target>
   <folder>`, run on this machine) when the machine is reached with ssh; on one reached with a
   command of its own the cell is plain text. When `code` cannot be started, a warning toast
   says so. Hovering the cell shows `Open <folder> in VS Code`.
@@ -102,18 +116,21 @@ status dots, 24px each, no headings.
   origin/main`; `clean · up to date with origin/main`; `… · no upstream`; `… · origin/old is
   gone` when the upstream it names is not there any more (git then prints no `# branch.ab`
   line).
-- **Drag a column's left border** (the line before its heading; the pointer becomes a column
-  resize one, the line turns `accent` while held): the columns hold to the right edge, so the
-  border stays under the pointer, the column right of it gets wider or narrower (28 to 480px),
-  everything left of it moves along and the name takes or gives the room; a column grows no
-  further than the name can give (down to its 190px). While the border is held, the columns
-  shown and the other widths stay as they were, and the rows are not built anew for each move.
-  A double-click on the border gives the column its own width back. The widths are kept in
-  `localStorage` (`widths`, JSON, column key to px), which Herdr keeps for each copy of a mod:
-  the copy opened over the window finds its widths again the next time it opens, and a copy in
-  a pane has its own. They are written when the border is let go (or the mod closes with it
-  held), one column at a time after reading what is stored, and read again when the mod opens
-  and at every reading of the processes, so copies that share a store agree.
+- **Drag a column's divider** (the line at the right edge of its heading; the pointer becomes
+  a column resize one over it, the line turns `accent` while held), as in Finder or a
+  spreadsheet: the divider stays under the pointer, that column gets wider or narrower (28 to
+  800px; the agent column 120 at least), and the columns right of it move along. The agent
+  column has a divider like the others. The rows are not built anew for each move. The drag
+  ends when the button goes up over the mod, and also where the pointer leaves the mod: the
+  width it had there is kept.
+- **Double-click a divider**: the column becomes as wide as the widest thing in it, its
+  heading included, plus 2px.
+- The widths are kept in `localStorage` (`widths`, JSON, column key to px; the agent column is
+  `name`), which Herdr keeps for each copy of a mod: the copy opened over the window finds its
+  widths again the next time it opens, and a copy in a pane has its own. They are written when
+  the divider is let go (or the mod closes with it held), one column at a time after reading
+  what is stored, and read again when the mod opens and at every reading of the processes, so
+  copies that share a store agree.
 - **Hover** a row: `hover` background; over the name (the whole row when it has two lines, the
   dot in the rail shows the name), a tip with the program, the terminal's address, the full
   folder, the branch and pull request, the git marks in words, and the agent's last report.
@@ -145,8 +162,10 @@ status dots, 24px each, no headings.
   in a port, `user@host:2222`), one call for all of them every 10 minutes, again after 30 s
   when it fails; `notify` for the toast; `nextCommand` (it has no commands, the loop only ends on
   reload); `props`, `home`, `theme`. Element handlers for the resizing: `on_mouse_down("left")`
-  on the border (its `click_count` tells the double-click, `position.x` where the drag began),
-  `on_mouse_move` and `on_mouse_up("left")` on the root.
+  on the divider (its `click_count` tells the double-click, `position.x` where the drag began),
+  `on_mouse_move`, `on_mouse_up("left")` and `on_hover` on a sheet laid over the mod while the
+  divider is held. `on_size_change` on the root for the block's size, and on a hidden copy of
+  one column for the double-click (below). `overflow_x_scrollbar` around the headings and rows.
 - Programs, all read-only but `code`, never started from `render`: from a timer
   (`cx.timer.every`), except the watch of this machine's telemetry folder, which is a `cx.spawn`
   loop started in `init`, and `code`, which a click starts:
@@ -208,14 +227,22 @@ status dots, 24px each, no headings.
 - Herdr's interface font draws no Nerd Font glyphs (they come out as boxes): the git marks are
   plain characters.
 - Moves and releases are heard only over the mod, and a move does not say whether a button is
-  down. So a release outside the mod is not heard and the column follows the pointer again
-  when it comes back, until the next press. While a border is held, lay a sheet over the whole
-  mod that hears the moves and the release anywhere on it and stops that next press, so it ends
-  the drag and does not reach a row (the sheet cannot stop the rows' hover). Do not end a drag
-  from `on_hover`. Keep what was dragged in `close()` too: the mod can close with a border held.
-- A column must not be widened past what the name can give, and the columns shown must not be
-  fitted again while a border is held: either way a column comes or goes in the middle of the
-  drag and the border leaves the pointer.
+  down. So a release outside the mod is not heard, and a drag left alive would follow the
+  pointer again when it comes back. While a divider is held, lay a sheet over the whole mod
+  (absolute, all four insets 0, the resize pointer): it hears the moves and the release
+  anywhere on the mod; its `on_hover(false)` says the pointer has left the mod, and ends the
+  drag there; a press on it ends the drag too and does not reach a row (the sheet cannot stop
+  the rows' hover). Keep what was dragged in `close()` as well: the mod can close with a
+  divider held.
+- There is no call that measures text. To fit a column to what is in it, draw that column
+  once more for one frame where nobody sees it (absolute, opacity 0, nothing to press, every
+  cell `flex_none` and not cut, heading included) under an id not used before, and take the
+  width its `on_size_change` reports.
+- The headings and the rows scroll sideways as one: both sit in one box as wide as the table
+  (the block's width at least) inside the sideways scroll area; the rows scroll up and down
+  inside that box, so the headings stay.
+- A name column that takes "the rest", or columns set against the right edge, move whenever a
+  column comes or goes. Fixed widths from the left edge do not.
 - Each machine reads on its own, so one that is slow or away holds up nobody else. A machine
   with no `ps -axo` (Windows, BusyBox) gets no CPU and memory.
 - A mod folder that is a symlink is not reloaded on save; install a copy.
@@ -225,7 +252,8 @@ status dots, 24px each, no headings.
 ## Done when
 
 - `herdr-app check` on the mod passes, and passes on copies forced into demo mode at 1400, 700,
-  300, 200, 120 and 60px wide (`scripts/check-renders.sh`).
+  300, 200, 120 and 60px wide, with a divider held, and with a column being measured
+  (`scripts/check-renders.sh`).
 - `node --test` passes: the tree, the process sums, git labels and status, telemetry matching,
   the number formats, the color scale, the column order and widths, the demo data.
 - With `--props '{"demo": true}'` it shows nine agents in three spaces, one of them on another
@@ -236,7 +264,10 @@ status dots, 24px each, no headings.
 - Writing a telemetry file for a running agent adds its figures to that row within a second;
   removing it takes them away.
 - Clicking a row goes to that agent's tab and pane; clicking its dir cell opens the folder in
-  VS Code and does not go to the agent.
+  VS Code, does not go to the agent and does not close the mod.
 - Opened over the window, the marked row is the agent of the pane the person was in.
-- A column dragged wider is as wide the next time the mod opens; a double-click on its border
-  puts it back.
+- A column dragged wider is as wide the next time the mod opens; a double-click on its
+  divider makes it as wide as what is in it.
+- Opened a second time, the first frame has the columns and the widths of every later frame;
+  so has the first frame after the mod's code was loaded again, with cells still empty.
+- In a block narrower than the table, the headings and rows scroll sideways together.
