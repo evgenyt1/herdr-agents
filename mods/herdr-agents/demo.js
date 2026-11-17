@@ -59,9 +59,13 @@ const record = (pid, hc, model, effort, percent, cost, limits = [23.5, 41]) => (
   updatedAt: 1_700_000_100_000,
 });
 
-const repo = (repoName, worktree, branch) => ({
+// What changed in a checkout, as `parseStatus` gives it.
+const status = (branch, upstream, counts = {}) => ({ branch, upstream, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0, ...counts });
+
+const repo = (repoName, worktree, branch, counts) => ({
   repo: { top: `/home/dev/src/${worktree ? `${repoName}-worktrees/${worktree}` : repoName}`, common: `/home/dev/src/${repoName}/.git`, repo: repoName, worktree, below: "" },
   branch,
+  status: status(branch, `origin/${branch}`, counts),
 });
 
 export function demoData() {
@@ -106,14 +110,17 @@ export function demoData() {
     ]],
     ["vps", [record(900, "t2", "claude-opus-5-5", "max", 71, 11.9, [64, 82])]],
   ]);
+  const rate = status("rate-limit", "origin/rate-limit", { conflicts: 1, modified: 2, ahead: 1, behind: 3 });
   const repos = new Map([
     [`\n${shop}`, repo("webshop", null, "main")],
-    [`\n${tree("cart-totals")}`, repo("webshop", "cart-totals", "fix/cart-totals")],
-    [`\n${tree("payment-form")}`, repo("webshop", "payment-form", "feat/payment-form")],
-    [`\n${tree("email-receipts")}`, repo("webshop", "email-receipts", "feat/email-receipts")],
-    [`vps\n${api}`, { repo: { top: api, common: `${api}/.git`, repo: "api", worktree: null, below: "" }, branch: "rate-limit" }],
-    [`vps\n${api}/migrations`, { repo: { top: api, common: `${api}/.git`, repo: "api", worktree: null, below: "migrations" }, branch: "rate-limit" }],
+    [`\n${tree("cart-totals")}`, repo("webshop", "cart-totals", "fix/cart-totals", { staged: 3, modified: 1, ahead: 2 })],
+    [`\n${tree("payment-form")}`, repo("webshop", "payment-form", "feat/payment-form", { modified: 5, untracked: 2 })],
+    [`\n${tree("email-receipts")}`, repo("webshop", "email-receipts", "feat/email-receipts", { behind: 4 })],
+    [`vps\n${api}`, { repo: { top: api, common: `${api}/.git`, repo: "api", worktree: null, below: "" }, branch: "rate-limit", status: rate }],
+    [`vps\n${api}/migrations`, { repo: { top: api, common: `${api}/.git`, repo: "api", worktree: null, below: "migrations" }, branch: "rate-limit", status: rate }],
   ]);
+  // How ssh reaches the other machine: its folders open in VS Code too.
+  const reach = new Map([["vps", { target: "vps", at: 0 }]]);
   const pr = (number, state) => ({ pr: { number, state, url: null, title: "" } });
   const prs = new Map([
     ["\n/home/dev/src/webshop/.git\nfix/cart-totals", pr(128, "open")],
@@ -121,5 +128,5 @@ export function demoData() {
     ["\n/home/dev/src/webshop/.git\nfeat/email-receipts", pr(126, "merged")],
     [`vps\n${api}/.git\nrate-limit`, pr(57, "open")],
   ]);
-  return { terminals, agents, spaces, procs, records, repos, prs, home: "/home/dev" };
+  return { terminals, agents, spaces, procs, records, repos, prs, reach, home: "/home/dev" };
 }

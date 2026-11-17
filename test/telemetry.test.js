@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { DIR_SCRIPT, NO_PID_LIVE_MS, telemetryDir, isTelemetryFile, parseTelemetry, matchTelemetry, shortModel, contextLevel, limitPercent } from "../mods/herdr-agents/lib/telemetry.js";
+import { DIR_SCRIPT, NO_PID_LIVE_MS, telemetryDir, isTelemetryFile, parseTelemetry, matchTelemetry, shortModel, modelEffort, limitPercent } from "../mods/herdr-agents/lib/telemetry.js";
 import { parsePs } from "../mods/herdr-agents/lib/ps.js";
 
 const FULL = {
@@ -164,11 +164,17 @@ test("matchTelemetry: a file written before the terminal was made is not that te
 });
 
 test("column helpers", () => {
-  assert.equal(shortModel("claude-opus-5-5"), "opus-5-5");
-  assert.equal(shortModel("claude-sonnet-5-5-20261001"), "sonnet-5-5");
+  assert.equal(shortModel("claude-opus-5-5"), "opus-5.5");
+  assert.equal(shortModel("claude-sonnet-5-5-20261001"), "sonnet-5.5");
+  assert.equal(shortModel("claude-opus-5-5[1m]"), "opus-5.5[1m]");
+  assert.equal(shortModel("claude-opus-5"), "opus-5");
+  assert.equal(shortModel("claude-3-5-sonnet-20241022"), "3-5-sonnet");
   assert.equal(shortModel("gpt-6.1-sol"), "gpt-6.1-sol");
   assert.equal(shortModel(null), "");
-  assert.deepEqual([0, 49, 50, 79, 80, 100, null].map(contextLevel), ["low", "low", "mid", "mid", "high", "high", null]);
+  assert.equal(modelEffort({ model: "claude-opus-5-5", effort: "xhigh" }), "opus-5.5/xhigh");
+  assert.equal(modelEffort({ model: "claude-opus-5-5", effort: null }), "opus-5.5");
+  assert.equal(modelEffort({ model: null, effort: "high" }), "high");
+  assert.equal(modelEffort(null), "");
   const before = Date.parse("2026-11-15T19:59:59Z");
   assert.equal(limitPercent(file({}), "five_hour", before), 23.5);
   assert.equal(limitPercent(file({}), "five_hour", before + 1000), null); // the window has reset

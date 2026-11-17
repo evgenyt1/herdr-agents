@@ -93,3 +93,94 @@ export function pickPr(stdout) {
   const state = word === "open" ? (raw.isDraft ? "draft" : "open") : word === "merged" ? "merged" : "closed";
   return { number: raw.number, state, url: typeof raw.url === "string" ? raw.url : null, title: typeof raw.title === "string" ? raw.title : "" };
 }
+
+/**
+ * `git` arguments for a checkout's branch and what has changed in it, read by `parseStatus`.
+ * `--no-optional-locks`: a status otherwise takes the index lock to write the index back, and
+ * an agent's own git in that checkout would find it locked.
+ */
+export const STATUS_ARGS = ["--no-optional-locks", "status", "--porcelain=v2", "--branch"];
+
+/**
+ * Output of `git` with STATUS_ARGS -> { branch, upstream, ahead, behind, staged, modified,
+ * untracked, conflicts }, or null for no output. `branch` is the branch, `@4a1b26c` when a
+ * commit is checked out, null before the first commit of a checkout without a branch. The
+ * counts are files: one both staged and changed again counts in both.
+ */
+export function parseStatus(stdout) {
+  const lines = String(stdout ?? "").split("\n").filter(Boolean);
+  if (!lines.length) return null;
+  const status = { branch: null, upstream: null, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0 };
+  let head = null;
+  let commit = null;
+  for (const line of lines) {
+    const kind = line[0];
+    if (kind === "#") {
+      const [, name, ...rest] = line.split(" ");
+      if (name === "branch.oid") commit = rest[0];
+      else if (name === "branch.head") head = rest.join(" ");
+      else if (name === "branch.upstream") status.upstream = rest.join(" ") || null;
+      else if (name === "branch.ab") {
+        status.ahead = Math.abs(parseInt(rest[0], 10)) || 0;
+        status.behind = Math.abs(parseInt(rest[1], 10)) || 0;
+      }
+    } else if (kind === "1" || kind === "2") {
+      // "1 XY ...": X is the index against the last commit, Y the folder against the index.
+      if (line[2] !== ".") status.staged += 1;
+      if (line[3] !== ".") status.modified += 1;
+    } else if (kind === "u") status.conflicts += 1;
+    else if (kind === "?") status.untracked += 1;
+  }
+  if (head && head !== "(detached)") status.branch = head;
+  else if (commit && commit !== "(initial)") status.branch = `@${commit.slice(0, 7)}`;
+  return status;
+}
+
+// What a status shows, in the order shown, each with its mark and its word.
+const PARTS = [
+  ["conflicts", "!", "in conflict"],
+  ["staged", "+", "staged"],
+  ["modified", "~", "modified"],
+  ["untracked", "?", "untracked"],
+  ["ahead", "↑", "ahead"],
+  ["behind", "↓", "behind"],
+];
+
+/** A status as short marks: [{ kind, text }], e.g. `+4`, `~3`, `↑2`; one `✓` when nothing is to say. */
+export function statusParts(status) {
+  if (!status) return [];
+  const parts = PARTS.filter(([kind]) => status[kind] > 0).map(([kind, mark]) => ({ kind, text: `${mark}${status[kind]}` }));
+  return parts.length ? parts : [{ kind: "clean", text: "✓" }];
+}
+
+/** The marks as one text: "+4 ~3 ↑2". */
+export const statusText = (status) => statusParts(status).map((part) => part.text).join(" ");
+
+/** A status in words, for a tip: "4 staged, 3 modified · 2 ahead, 1 behind origin/main". */
+export function statusNote(status) {
+  if (!status) return "";
+  const words = (kinds) => PARTS.filter(([kind]) => kinds.includes(kind) && status[kind] > 0).map(([kind, , word]) => `${status[kind]} ${word}`);
+  const changes = words(["conflicts", "staged", "modified", "untracked"]).join(", ") || "clean";
+  if (!status.upstream) return `${changes} · no upstream`;
+  const far = words(["ahead", "behind"]);
+  const link = far.length ? `${far.join(", ")}${status.behind ? "" : " of"}` : "up to date with";
+  return `${changes} · ${link} ${status.upstream}`;
+}
+
+/** Arguments for VS Code's `code` to open a folder: here, or on a machine reached with ssh. */
+export const codeArgs = (path, host) => (host ? ["--remote", `ssh-remote+${host}`, path] : [path]);
+
+/**
+ * Output of `hc machine ls --json` -> how ssh reaches the machine called `name`, or null when
+ * it is not listed or is reached with a command of its own (`via`).
+ */
+export function sshTarget(stdout, name) {
+  let list;
+  try {
+    list = JSON.parse(stdout)?.machines;
+  } catch {
+    return null;
+  }
+  const machine = Array.isArray(list) ? list.find((one) => one?.name === name) : null;
+  return machine && !machine.via && typeof machine.target === "string" && machine.target ? machine.target : null;
+}

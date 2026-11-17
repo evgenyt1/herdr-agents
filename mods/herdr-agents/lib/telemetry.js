@@ -118,16 +118,18 @@ export function matchTelemetry(terminals, records, procs = null, now = Date.now(
   return new Map([...claims].map(([address, claim]) => [address, claim.record]));
 }
 
-/** "claude-opus-5-5-20261001" -> "opus-5-5": the vendor prefix and a date stamp say nothing in a column. */
+/**
+ * "claude-opus-5-5-20261001" -> "opus-5.5": the vendor prefix and a date stamp say nothing in a
+ * column, and a version reads as one.
+ */
 export function shortModel(model) {
   if (!model) return "";
-  return String(model).replace(/^claude-/, "").replace(/-\d{8}$/, "");
+  return String(model).replace(/^claude-/, "").replace(/-\d{8}$/, "").replace(/-(\d+)-(\d+)(?=$|\[)/, "-$1.$2");
 }
 
-/** How full the context is: "low" under 50%, "mid" under 80%, else "high". */
-export function contextLevel(percent) {
-  if (percent == null) return null;
-  return percent < 50 ? "low" : percent < 80 ? "mid" : "high";
+/** A record's model and effort as one text: "opus-5.5/xhigh"; either alone when the other is missing. */
+export function modelEffort(record) {
+  return [shortModel(record?.model), record?.effort].filter(Boolean).join("/");
 }
 
 /**

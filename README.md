@@ -18,7 +18,8 @@ Always:
 | agent | The terminal's name and title, with the program's icon. |
 | status | working, needs you, done or idle, in Herdr's own colors. |
 | tab | The tab it is in; a sub-agent without a pane of its own is in its parent's tab. The space is named too when the row is listed under another space. |
-| folder | The repository, then the worktree and the folder below it. Outside a repository, the path. |
+| dir | The repository, then the worktree and the folder below it. Outside a repository, the path. Click it to open the folder in VS Code. |
+| git | What has changed in the checkout: `+3` staged, `~1` modified, `?2` untracked, `!1` in conflict, `↑2` ahead of and `↓1` behind its upstream, `✓` when there is nothing to say. Each mark has a color. |
 | branch | The git branch there; `@abc1234` when a commit is checked out. |
 | PR | The branch's pull request: open, draft (muted) or merged (`✓`). Click it to open it. |
 | CPU, mem | Of the agent's process and everything it started. CPU is the load over the last 20 seconds or so (a minute on Linux, where `ps` counts CPU time in whole seconds), 100% being one core. |
@@ -27,24 +28,32 @@ With agent-telemetry, for each terminal a file matches:
 
 | Column | What |
 | --- | --- |
-| model, effort | The model of the last request and its reasoning effort. |
-| ctx | How full the context is: green under 50%, yellow under 80%, red from there. |
-| 5h, 7d | How much of the five-hour and seven-day limits is used. |
+| model/effort | The model of the last request and its reasoning effort, as `opus-5.5/xhigh`. Each has a color of its own, from green to red: the model by its size (haiku or mini, sonnet, opus, fable; for Codex mini, the plain model, max or sol), the effort from low to max. |
+| ctx | How full the context is, from green at 0% through yellow at 50% to red at 100%. |
+| 7d, 5h | How much of the seven-day and five-hour limits is used, in the same colors. |
 | cost | What the session has cost so far. |
 
-A column nobody has anything for is left out, so without telemetry files there are no telemetry
-columns. In a narrow block the least important columns go first; under 520 px each agent takes
-two lines; under 110 px only the status dots stay.
+The colors are the theme's own green, yellow and red and what lies between them.
+
+The columns stand in this order: status, model/effort, ctx, 7d, tab, dir, git, branch, PR, CPU,
+mem, 5h, cost. A column nobody has anything for is left out, so without telemetry files there
+are no telemetry columns. In a narrow block the least important columns go first; under 520 px
+each agent takes two lines; under 110 px only the status dots stay.
+
+Drag the line before a column's heading to make that column wider or narrower; the name takes
+or gives the room. A double-click on the line gives the column its own width back. The widths
+are kept.
 
 ![Two narrow copies and a rail](docs/narrow.png)
 
-Click a row, or press Enter on it, to go to that agent. Arrows or `j` / `k` move, Left and
-Right fold and unfold an agent's sub-agents. A folded agent says how many it hides, in the
+Click a row, or press Enter on it, to go to that agent. Arrows or `j` / `k` move, starting
+from the agent you are in, and Left and Right fold and unfold an agent's sub-agents. A folded agent says how many it hides, in the
 color of the most urgent one, and they stay in the counts at the top.
 
 ## Install
 
-Needs Herdr.app. `git` and `gh` are used when they are there.
+Needs Herdr.app. `git` and `gh` are used when they are there, and VS Code's `code` command to
+open a folder.
 
 ```sh
 git clone https://github.com/evgenyt1/herdr-agents
@@ -88,7 +97,9 @@ looked for every 30 seconds.
 ## Other machines
 
 Agents on machines added to Herdr (`hc machine ls`) are listed too. Their processes, git state
-and telemetry folder are read on that machine, every 15 to 30 seconds.
+and telemetry folder are read on that machine, every 15 to 30 seconds. A folder on a machine
+reached with ssh opens in VS Code over ssh (`code --remote ssh-remote+<target>`); on a machine
+reached with a command of its own, the folder is not a link.
 
 ## Settings
 
@@ -105,16 +116,18 @@ Props, where a layout or a command gives them (`--props '{"refresh": 10}'`):
 
 ## What it runs
 
-In the background, never while drawing: `ps` every 5 seconds, `git` every 10 seconds for each
-folder an agent is in, and `gh pr list --head <branch>` for each branch every 2 minutes (5 when
-it has no pull request). It only reads. What it has read is kept while Herdr runs, so opening the mod again
-shows branches and pull requests at once. Where there is no `ps` that takes `-axo` (Windows,
+In the background, never while drawing: `ps` every 5 seconds, one `git status` every 10 seconds
+for each checkout an agent is in (without taking git's index lock; less often where it is slow,
+so that it stays under a twentieth of one core), and `gh pr list --head <branch>` for each
+branch every 2 minutes (5 when it has no pull request). It only reads. `code` runs when you
+click a folder, and only then. What it has read is kept while Herdr runs, so opening the mod
+again shows branches and pull requests at once. Where there is no `ps` that takes `-axo` (Windows,
 BusyBox), CPU and memory stay empty.
 
 ## Working on it
 
 ```sh
-node --test                           # tree building, telemetry, ps and git parsing
+node --test                           # tree building, telemetry, ps and git parsing, colors, columns
 herdr-app check mods/herdr-agents     # the mod loads and renders (with no agents)
 ./scripts/check-renders.sh            # the same with the demo's rows, at six widths
 ./install.sh                          # then look at it in Herdr
