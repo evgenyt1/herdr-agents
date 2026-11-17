@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildTree, isAgent, rowStatus, splitAddress } from "../mods/herdr-agents/lib/tree.js";
+import { buildTree, isAgent, rowStatus, splitAddress, panedTerminals, goCommand } from "../mods/herdr-agents/lib/tree.js";
 
 const agent = (address, more = {}) => ({ address, state: "live", status: "idle", program: { agent: true }, created_ms: 0, ...more });
 const listed = (address, space, more = {}) => ({ address, space, space_name: space, tab: `${space}-tab`, tab_index: 1, tab_name: "1", status: "idle", ...more });
@@ -150,4 +150,19 @@ test("a terminal hanging off a parent loop stays under its parent", () => {
     agent("t3", { parent: "t2", created_ms: 30 }),
   ];
   assert.deepEqual(buildTree(terminals).rows.map((row) => [row.address, row.depth]), [["t2", 0], ["t1", 1], ["t3", 1]]);
+});
+
+test("panedTerminals: the terminals Herdr has a pane for, by panes() and by agents()", () => {
+  const panes = [{ pane: "p1", terminal: "t24" }, { pane: "p2", terminal: "t25" }, { pane: "p3", terminal: null, mod: "herdr-agents" }, { pane: "p4", terminal: "vps/t7" }];
+  const agents = [{ address: "t25", pane: "p2" }, { address: "t30", pane: "p9" }, { address: "t31" }];
+  assert.deepEqual([...panedTerminals(panes, agents)].sort(), ["t24", "t25", "t30", "vps/t7"]);
+  assert.deepEqual([...panedTerminals(null, undefined)], []);
+});
+
+test("goCommand: an agent with a pane is gone to, one without (hc run --bg) is peeked at", () => {
+  // As Herdr reports a helper started in the background: in terminals(), in neither panes() nor agents().
+  const paned = panedTerminals([{ pane: "p1", terminal: "t24" }, { pane: "p2", terminal: "t25" }], [{ address: "t24", pane: "p1" }, { address: "t25", pane: "p2" }]);
+  assert.deepEqual(goCommand("t25", paned), { name: "agent.focus", args: { terminal: "t25" } });
+  assert.deepEqual(goCommand("t2s", paned), { name: "terminal.peek", args: { terminal: "t2s" } });
+  assert.deepEqual(goCommand("vps/t7", paned), { name: "terminal.peek", args: { terminal: "vps/t7" } });
 });

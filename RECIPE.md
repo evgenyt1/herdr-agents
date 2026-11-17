@@ -98,7 +98,10 @@ status dots, 24px each, no headings.
   filled and still; idle is a 1.5px ring. An agent Herdr has no status for gets a ring in
   `unknown`.
 - **Click a row**, or Enter on the row under the keyboard: Herdr goes to that agent
-  (`agent.focus`). Opened over the window, the mod then closes, unless the `stay` prop is set.
+  (`agent.focus`). An agent without a pane of its own (a helper another agent started in the
+  background with `hc run --bg`) is peeked at over the current tab instead (`terminal.peek`,
+  which has controls to keep it as a tab and to close it); its tip says so. Opened over the
+  window, the mod then closes, unless the `stay` prop is set.
 - **Keys**, when the block has the keyboard: Down/`j`, Up/`k`, Home, End move the row marked
   with `hover`; Left folds a row's helpers, Right shows them again. The marked row starts on
   the agent the person is in (the pane with the focus) and goes back to it whenever the focus
@@ -158,7 +161,8 @@ status dots, 24px each, no headings.
   the space and tab come from `agents()`, or from the nearest parent that has them);
   `exec(..., { on })` and `readTextFile(..., { on })` for everything read, here or on another
   machine; `watchFolder` for the telemetry folder; `setAgentOrder`; `run("agent.focus",
-  { terminal })`; `closeOverlay`; `focused().agent` for the agent the person is in, when no
+  { terminal })` and `run("terminal.peek", { terminal })`; `panes()` to tell which of the two
+  (below); `closeOverlay`; `focused().agent` for the agent the person is in, when no
   entry of `agents()` is marked `focused`; `hc(["machine", "ls", "--json"])` for how the other
   machines are reached (`target`; not a link when `via` says it is a command, or when it ends
   in a port, `user@host:2222`), one call for all of them every 10 minutes, again after 30 s
@@ -225,6 +229,10 @@ status dots, 24px each, no headings.
   folder's name. Git before 2.31 prints `--path-format=absolute` back and answers with relative
   paths.
 - `terminals()` can name parents in a loop; break it at a terminal on the loop.
+- `agent.focus` answers ok and does nothing for a terminal without a pane. Such a terminal is
+  in `terminals()` and in neither `panes()` nor `agents()`: a row whose address no entry of
+  `panes()` has as `terminal` (and `agents()` does not list with a `pane`) gets
+  `terminal.peek`.
 - A plain `git status` takes the index lock to write the index back, and an agent's own git in
   that checkout then fails on the lock: ask with `--no-optional-locks`.
 - Herdr's interface font draws no Nerd Font glyphs (they come out as boxes): the git marks are
@@ -273,6 +281,7 @@ status dots, 24px each, no headings.
 - A file changed in an agent's checkout shows in its git cell within about ten seconds.
 - Writing a telemetry file for a running agent adds its figures to that row within a second;
   removing it takes them away.
+- Enter on a helper started with `hc run --bg` opens a peek at it over the tab.
 - Clicking a row goes to that agent's tab and pane; clicking its dir cell opens the folder in
   VS Code, does not go to the agent and does not close the mod.
 - Opened over the window, the marked row is the agent of the pane the person was in.

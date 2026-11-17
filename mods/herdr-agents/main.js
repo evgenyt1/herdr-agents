@@ -4,9 +4,9 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, Scrollbar } from "gpui-base";
-import { agents, terminals, spaces, focused, theme, props, run, exec, hc, home, notify, readTextFile, watchFolder, nextCommand, setAgentOrder, closeOverlay } from "herdr";
+import { agents, terminals, panes, spaces, focused, theme, props, run, exec, hc, home, notify, readTextFile, watchFolder, nextCommand, setAgentOrder, closeOverlay } from "herdr";
 import * as fs from "fs/promises";
-import { buildTree, isAgent, splitAddress } from "./lib/tree.js";
+import { buildTree, isAgent, splitAddress, panedTerminals, goCommand } from "./lib/tree.js";
 import { PS_ARGS, parsePs, withRates, coarseTimes, childIndex, treeUsage } from "./lib/ps.js";
 import { DIR_SCRIPT, telemetryDir, isTelemetryFile, parseTelemetry, matchTelemetry, shortModel, modelEffort, limitPercent } from "./lib/telemetry.js";
 import { REPO_ARGS, STATUS_ARGS, prArgs, parseRepo, parseStatus, statusParts, fitParts, statusText, statusNote, codeArgs, sshTarget, pickPr, folderLabel, tilde } from "./lib/git.js";
@@ -598,6 +598,8 @@ export default class HerdrAgents extends View {
     const order = (this.folded.size ? buildTree(source.terminals, source.agents, source.spaces) : tree).rows.map((row) => row.address);
     const houseOf = (key) => demo?.home ?? (key ? this.data.homes.get(key) ?? null : home());
     const spaceName = new Map((source.spaces ?? []).map((space) => [space.id, space.name]));
+    // Which agents have a pane to go to; the rest (helpers started in the background) are peeked at.
+    const paned = demo ? null : panedTerminals(panes(), source.agents);
 
     const telemetry = new Map();
     const perMachine = new Map();
@@ -649,7 +651,8 @@ export default class HerdrAgents extends View {
           pr,
           usage,
           tele: telemetry.get(row.address) ?? null,
-          tip: [`${terminal.program?.name ?? "agent"} · ${row.address}`, cwd ? tilde(cwd, house) : null, [branch, prNote(pr)].filter(Boolean).join(" · "), statusNote(git), terminal.report?.msg].filter(Boolean).join("\n"),
+          go: paned ? goCommand(row.address, paned) : null,
+          tip: [`${terminal.program?.name ?? "agent"} · ${row.address}${paned && !paned.has(row.address) ? " · no pane: a click peeks at it" : ""}`, cwd ? tilde(cwd, house) : null, [branch, prNote(pr)].filter(Boolean).join(" · "), statusNote(git), terminal.report?.msg].filter(Boolean).join("\n"),
         };
       }),
     }));
@@ -658,7 +661,7 @@ export default class HerdrAgents extends View {
 
   /** Everything a redraw would show differently, as one string. */
   digest(model) {
-    return this.shownColumns(model).join(",") + "\n" + model.rows.map((row) => [row.address, row.depth, row.name, row.title, ...COLUMNS.map((column) => cellText(row, column.key)), row.pr?.state ?? "", row.open?.host ?? (row.open ? "here" : ""), row.hidden.join(",")].join("\t")).join("\n");
+    return this.shownColumns(model).join(",") + "\n" + model.rows.map((row) => [row.address, row.depth, row.name, row.title, ...COLUMNS.map((column) => cellText(row, column.key)), row.pr?.state ?? "", row.open?.host ?? (row.open ? "here" : ""), row.go?.name ?? "", row.hidden.join(",")].join("\t")).join("\n");
   }
 
   /** Opened over the window, the mod goes away once it has taken the person somewhere. */
@@ -669,8 +672,8 @@ export default class HerdrAgents extends View {
 
   activate(row, cx) {
     this.cursor = row.address;
-    if (!this.demo) {
-      run("agent.focus", { terminal: row.address });
+    if (row.go) {
+      run(row.go.name, row.go.args);
       this.leave();
     }
     cx.notify();

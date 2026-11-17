@@ -172,3 +172,23 @@ export function buildTree(terminals, agents = [], spaces = [], folded = new Set(
   const ordered = [...groups.values()].sort((a, b) => a.order - b.order || String(a.machine ?? "").localeCompare(String(b.machine ?? "")));
   return { groups: ordered, rows: ordered.flatMap((group) => group.rows) };
 }
+
+/**
+ * The terminals that have a pane of their own: the ones `panes()` shows, and the agents
+ * `agents()` lists with one. A helper an agent started in the background (`hc run --bg`) is
+ * in `terminals()` only.
+ */
+export function panedTerminals(panes, agents) {
+  const paned = new Set();
+  for (const pane of panes ?? []) if (pane?.terminal) paned.add(pane.terminal);
+  for (const agent of agents ?? []) if (agent?.address && agent.pane) paned.add(agent.address);
+  return paned;
+}
+
+/**
+ * The command that takes the person to an agent. `agent.focus` goes to its pane; for a
+ * terminal without one it answers ok and does nothing, so that one is peeked at over the tab.
+ */
+export function goCommand(address, paned) {
+  return { name: paned.has(address) ? "agent.focus" : "terminal.peek", args: { terminal: address } };
+}
