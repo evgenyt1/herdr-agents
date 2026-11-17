@@ -102,17 +102,20 @@ export function pickPr(stdout) {
 export const STATUS_ARGS = ["--no-optional-locks", "status", "--porcelain=v2", "--branch"];
 
 /**
- * Output of `git` with STATUS_ARGS -> { branch, upstream, ahead, behind, staged, modified,
- * untracked, conflicts }, or null for no output. `branch` is the branch, `@4a1b26c` when a
- * commit is checked out, null before the first commit of a checkout without a branch. The
- * counts are files: one both staged and changed again counts in both.
+ * Output of `git` with STATUS_ARGS -> { branch, upstream, gone, ahead, behind, staged, modified,
+ * untracked, conflicts }, or null for no output. `branch` is the branch, `@9f8e7d6` when a
+ * commit is checked out, null before the first commit of a checkout without a branch. `gone`:
+ * the upstream it names is not there any more (git then says nothing of ahead and behind). The
+ * counts are lines of the status: a file both staged and changed again counts in both, an
+ * untracked folder counts once.
  */
 export function parseStatus(stdout) {
   const lines = String(stdout ?? "").split("\n").filter(Boolean);
   if (!lines.length) return null;
-  const status = { branch: null, upstream: null, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0 };
+  const status = { branch: null, upstream: null, gone: false, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0 };
   let head = null;
   let commit = null;
+  let far = false;
   for (const line of lines) {
     const kind = line[0];
     if (kind === "#") {
@@ -121,6 +124,7 @@ export function parseStatus(stdout) {
       else if (name === "branch.head") head = rest.join(" ");
       else if (name === "branch.upstream") status.upstream = rest.join(" ") || null;
       else if (name === "branch.ab") {
+        far = true;
         status.ahead = Math.abs(parseInt(rest[0], 10)) || 0;
         status.behind = Math.abs(parseInt(rest[1], 10)) || 0;
       }
@@ -131,6 +135,7 @@ export function parseStatus(stdout) {
     } else if (kind === "u") status.conflicts += 1;
     else if (kind === "?") status.untracked += 1;
   }
+  status.gone = status.upstream != null && !far;
   if (head && head !== "(detached)") status.branch = head;
   else if (commit && commit !== "(initial)") status.branch = `@${commit.slice(0, 7)}`;
   return status;
@@ -162,6 +167,7 @@ export function statusNote(status) {
   const words = (kinds) => PARTS.filter(([kind]) => kinds.includes(kind) && status[kind] > 0).map(([kind, , word]) => `${status[kind]} ${word}`);
   const changes = words(["conflicts", "staged", "modified", "untracked"]).join(", ") || "clean";
   if (!status.upstream) return `${changes} · no upstream`;
+  if (status.gone) return `${changes} · ${status.upstream} is gone`;
   const far = words(["ahead", "behind"]);
   const link = far.length ? `${far.join(", ")}${status.behind ? "" : " of"}` : "up to date with";
   return `${changes} · ${link} ${status.upstream}`;
@@ -171,8 +177,9 @@ export function statusNote(status) {
 export const codeArgs = (path, host) => (host ? ["--remote", `ssh-remote+${host}`, path] : [path]);
 
 /**
- * Output of `hc machine ls --json` -> how ssh reaches the machine called `name`, or null when
- * it is not listed or is reached with a command of its own (`via`).
+ * Output of `hc machine ls --json` -> how ssh reaches the machine called `name`, as VS Code can
+ * be told it, or null: when the machine is not listed, is reached with a command of its own
+ * (`via`), or on a port of its own (`can@10.0.0.7:2222`), which `ssh-remote+` has no place for.
  */
 export function sshTarget(stdout, name) {
   let list;
@@ -182,5 +189,6 @@ export function sshTarget(stdout, name) {
     return null;
   }
   const machine = Array.isArray(list) ? list.find((one) => one?.name === name) : null;
-  return machine && !machine.via && typeof machine.target === "string" && machine.target ? machine.target : null;
+  const target = machine && !machine.via && typeof machine.target === "string" ? machine.target.trim() : "";
+  return target && !/:\d+$/.test(target) && !/\s/.test(target) ? target : null;
 }

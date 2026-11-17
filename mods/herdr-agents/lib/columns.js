@@ -41,13 +41,28 @@ export function parseWidths(text) {
   return widths;
 }
 
-/** The columns with the widths a person gave them. */
-export function sized(columns, widths) {
-  return columns.map((column) => (widths?.[column.key] ? { ...column, width: widths[column.key] } : column));
-}
-
 /**
  * A column's width after its left border was dragged `dx` px to the right. The columns hold to
  * the right edge of the table, so the border follows the pointer and the name takes the rest.
  */
 export const dragged = (width, dx) => clampWidth(width - dx);
+
+/**
+ * Which columns a block has room for, and how wide each is. `columns` in display order with
+ * their own widths; `widths`: the ones a person gave; `room` px, `gap` px between columns.
+ * Columns are taken by rank, 1 first, until one does not fit. A column that does not fit as
+ * wide as the person made it is tried at its own width: a width set in a wide block must not
+ * hide the column, and the border that would put it back, in a narrow one.
+ */
+export function fitted(columns, widths, room, gap = 0) {
+  const kept = new Map();
+  let used = 0;
+  for (const column of [...columns].sort((a, b) => a.rank - b.rank)) {
+    const between = kept.size ? gap : 0;
+    const width = [widths?.[column.key], column.width].find((one) => one && used + between + one <= room);
+    if (!width) break;
+    used += between + width;
+    kept.set(column.key, width);
+  }
+  return columns.filter((column) => kept.has(column.key)).map((column) => ({ ...column, width: kept.get(column.key) }));
+}

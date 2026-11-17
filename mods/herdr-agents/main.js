@@ -11,7 +11,7 @@ import { PS_ARGS, parsePs, withRates, coarseTimes, childIndex, treeUsage } from 
 import { DIR_SCRIPT, telemetryDir, isTelemetryFile, parseTelemetry, matchTelemetry, shortModel, modelEffort, limitPercent } from "./lib/telemetry.js";
 import { REPO_ARGS, STATUS_ARGS, prArgs, parseRepo, parseStatus, statusParts, statusText, statusNote, codeArgs, sshTarget, pickPr, folderLabel, tilde } from "./lib/git.js";
 import { cpuText, memText, costText, percentText, fitColumns, prText, prNote, countWidth } from "./lib/format.js";
-import { COLUMNS, parseWidths, sized, dragged } from "./lib/columns.js";
+import { COLUMNS, parseWidths, fitted, dragged } from "./lib/columns.js";
 import { heat, percentLevel, modelLevel, effortLevel } from "./lib/colors.js";
 import { demoData } from "./demo.js";
 
@@ -107,12 +107,9 @@ export default class HerdrAgents extends View {
     this.reveal = null;
     this.lines = [];
     this.widths = {}; // column -> px, as the person dragged them
-    this.drag = null; // { key, x, width, most } while a column's border is held
-    try {
-      this.widths = parseWidths(localStorage.getItem("widths"));
-    } catch {
-      // No storage here: the columns keep their own widths.
-    }
+    this.drag = null; // { key, x, width, now, most, shown } while a column's border is held
+    this.last = null; // the rows as last drawn
+    this.loadWidths();
     this.handle = cx.focus_handle();
     this.scroll = ScrollHandle.new();
     this.running = new Map(); // job -> when it started
@@ -212,8 +209,13 @@ export default class HerdrAgents extends View {
         return changed;
       });
       if (machine) this.job(`telemetry ${key}`, cx, () => this.readRemoteTelemetry(machine));
-      if (machine) this.job(`reach ${key}`, cx, () => this.readReach(machine));
     }
+    const others = machines.filter(Boolean);
+    if (others.length) this.job("reach", cx, () => this.readReach(others));
+    // A copy sharing this one's storage may have stored new widths.
+    const widths = JSON.stringify(this.widths);
+    if (!this.drag) this.loadWidths();
+    if (widths !== JSON.stringify(this.widths)) cx.notify();
     for (const key of this.data.procs.keys()) {
       if (machines.some((machine) => (machine ?? "") === key)) continue;
       this.data.procs.delete(key);
@@ -313,40 +315,56 @@ export default class HerdrAgents extends View {
 
   /**
    * A checkout's branch and what changed in it: { branch, status }, or null when the folder is
-   * not a checkout any more. A git that does not know the status asked gives the branch alone.
+   * not a checkout any more. Where the status cannot be had (an old git, a checkout too large
+   * to answer in time), the branch alone.
    */
   async readHead(machine, top) {
     const where = machine ?? "";
     const git = (args) => exec("git", args, { cwd: top, on: machine, timeout: 10000 });
-    const plain = (this.data.plainGit.get(where) ?? 0) > Date.now();
-    if (!plain) {
-      const out = await git(STATUS_ARGS);
-      const status = out.code === 0 ? parseStatus(out.stdout) : null;
-      if (status) return { branch: status.branch, status };
+    if ((this.data.plainGit.get(where) ?? 0) <= Date.now()) {
+      try {
+        const out = await git(STATUS_ARGS);
+        const status = out.code === 0 ? parseStatus(out.stdout) : null;
+        if (status) return { branch: status.branch, status };
+        // 129: this git does not know the options (it is older than 2.15). Any other failure is
+        // this checkout's own (a broken index): its branch alone, and the others are not touched.
+        if (out.code === 129) this.data.plainGit.set(where, Date.now() + PLAIN_GIT_MS);
+      } catch {
+        // No answer in time (a very large checkout), or the machine is away: the branch, which
+        // is quick to ask, tells which.
+      }
     }
     const head = await git(["symbolic-ref", "--short", "-q", "HEAD"]);
-    if (head.code !== 0 && head.code !== 1) return null;
-    // The branch could be asked for and the status could not: this git is older than the options.
-    if (!plain) this.data.plainGit.set(where, Date.now() + PLAIN_GIT_MS);
     if (head.code === 0) return { branch: head.stdout.trim() || null, status: null };
+    if (head.code !== 1) return null;
     // No branch: a commit is checked out.
     const commit = await git(["rev-parse", "--short", "HEAD"]);
     return { branch: commit.code === 0 && commit.stdout.trim() ? `@${commit.stdout.trim()}` : null, status: null };
   }
 
-  /** How ssh reaches another machine, for opening its folders in VS Code. Answers whether it changed. */
-  async readReach(machine) {
-    const held = this.data.reach.get(machine);
-    if (held && Date.now() - held.at < REACH_MS) return false;
-    let target = held?.target ?? null;
+  /**
+   * How ssh reaches the other machines, for opening their folders in VS Code: one listing for
+   * all of them. Answers whether any changed.
+   */
+  async readReach(machines) {
+    const data = this.data;
+    const now = Date.now();
+    if (machines.every((machine) => now - (data.reach.get(machine)?.at ?? -Infinity) < REACH_MS)) return false;
+    let listing = null;
     try {
       const out = await hc(["machine", "ls", "--json"]);
-      if (out.code === 0) target = sshTarget(out.stdout, machine);
+      if (out.code === 0) listing = out.stdout;
     } catch {
-      // hc did not answer: what was known stays.
+      // hc did not answer: what was known stays, and it is asked again soon.
     }
-    this.data.reach.set(machine, { target, at: Date.now() });
-    return target !== (held?.target ?? null);
+    let changed = false;
+    for (const machine of machines) {
+      const held = data.reach.get(machine)?.target ?? null;
+      const target = listing == null ? held : sshTarget(listing, machine);
+      if (target !== held) changed = true;
+      data.reach.set(machine, { target, at: listing == null ? now - REACH_MS + REMOTE_MS * 2 : now });
+    }
+    return changed;
   }
 
   /** Whether gh can be run on a machine at all: "here", "missing", or "away" (it cannot be told). */
@@ -642,18 +660,18 @@ export default class HerdrAgents extends View {
   }
 
   // A column's left border is dragged: the columns hold to the right edge, so the border stays
-  // under the pointer, the column takes its width from the name, and no more than the name can give.
+  // under the pointer, the column takes its width from the name, and no more than the name can
+  // give. While it is held, the columns shown and the other widths stay as they were.
 
-  dragStart(column, spare, event, cx) {
+  dragStart(column, columns, spare, event, cx) {
     cx.stop_propagation();
     if (event.click_count >= 2) {
       // Pressed twice: back to the column's own width.
-      const { [column.key]: _own, ...rest } = this.widths;
-      this.widths = rest;
       this.drag = null;
-      this.saveWidths();
+      this.storeWidth(column.key, null);
     } else {
-      this.drag = { key: column.key, x: event.position.x, width: column.width, most: column.width + Math.max(0, spare) };
+      const shown = Object.fromEntries(columns.map((one) => [one.key, one.width]));
+      this.drag = { key: column.key, x: event.position.x, width: column.width, now: column.width, most: column.width + Math.max(0, spare), shown };
     }
     cx.notify();
   }
@@ -662,19 +680,39 @@ export default class HerdrAgents extends View {
     const drag = this.drag;
     if (!drag) return;
     const width = Math.min(dragged(drag.width, event.position.x - drag.x), drag.most);
-    if (width === (this.widths[drag.key] ?? drag.width)) return;
-    this.widths = { ...this.widths, [drag.key]: width };
+    if (width === drag.now) return;
+    drag.now = width;
     cx.notify();
   }
 
   dragEnd(cx) {
-    if (!this.drag) return;
+    const drag = this.drag;
+    if (!drag) return;
     this.drag = null;
-    this.saveWidths();
+    if (drag.now !== drag.width) this.storeWidth(drag.key, drag.now);
     cx.notify();
   }
 
-  saveWidths() {
+  /** The copy goes while a border is held (Esc over the window): what was dragged so far is kept. */
+  close() {
+    const drag = this.drag;
+    this.drag = null;
+    if (drag && drag.now !== drag.width) this.storeWidth(drag.key, drag.now);
+  }
+
+  loadWidths() {
+    try {
+      this.widths = parseWidths(localStorage.getItem("widths"));
+    } catch {
+      // No storage here: the columns keep their own widths, or what was dragged in this copy.
+    }
+  }
+
+  /** Keeps one column's width (null: its own again). Read first: a copy sharing the storage may have stored others. */
+  storeWidth(key, width) {
+    this.loadWidths();
+    const { [key]: _own, ...rest } = this.widths;
+    this.widths = width == null ? rest : { ...rest, [key]: width };
     try {
       localStorage.setItem("widths", JSON.stringify(this.widths));
     } catch {
@@ -816,7 +854,7 @@ export default class HerdrAgents extends View {
           .child(div().id(`border-${column.key}`).absolute().left(-GAP / 2 - 4).top(-2).bottom(-2).w(9).rounded(2).cursor_col_resize()
             .hover((el) => el.bg(t.hover))
             .tooltip("Drag to resize, double-click to reset")
-            .on_mouse_down("left", (event, cx) => this.dragStart(column, spare, event, cx))
+            .on_mouse_down("left", (event, cx) => this.dragStart(column, columns, spare, event, cx))
             .child(div().absolute().left(4).top(3).bottom(3).w(1).bg(this.drag?.key === column.key ? t.accent : t.border)))));
   }
 
@@ -840,8 +878,8 @@ export default class HerdrAgents extends View {
   }
 
   compactRow(t, row) {
+    const dir = cellText(row, "dir");
     const about = [
-      cellText(row, "dir"),
       // A clean checkout says nothing here: its mark would read as the merged one's.
       [row.branch, statusParts(row.git).some((part) => part.kind !== "clean") ? cellText(row, "git") : "", cellText(row, "pr"), row.pr?.state === "merged" ? "✓" : ""].filter(Boolean).join(" "),
       cellText(row, "model"),
@@ -855,7 +893,13 @@ export default class HerdrAgents extends View {
           .children(this.lead(t, row).slice(row.depth ? 1 : 0))
           .child(div().min_w(0).truncate().text_color(row.status === "idle" ? t.muted : t.foreground).child(row.name))
           .when(row.kids, (el) => el.child(this.fold(t, row))))
-        .when(about, (el) => el.child(div().text_size(11).text_color(t.dim).truncate().child(about))))
+        .when(dir || about, (el) => el.child(h_flex().min_w(0).gap(3).text_size(11).text_color(t.dim)
+          .when(dir && row.open, (line) => line.child(div().id(`dir-${row.address}`).min_w(0).truncate().cursor_pointer()
+            .hover((link) => link.underline().text_color(t.foreground))
+            .on_click((_event, cx) => { cx.stop_propagation(); this.openDir(row, cx); })
+            .child(dir)))
+          .when(dir && !row.open, (line) => line.child(div().min_w(0).truncate().child(dir)))
+          .when(about, (line) => line.child(div().flex_1().min_w(0).truncate().child(dir ? `· ${about}` : about))))))
       .when(context, (el) => el.child(div().flex_none().text_size(11.5).text_color(this.cellColor(t, row, "context")).child(context)))
       .child(this.dot(t, row.status));
   }
@@ -898,9 +942,14 @@ export default class HerdrAgents extends View {
   render() {
     const t = theme();
     const given = props() ?? {};
-    const model = this.model();
-    this.shown = this.digest(model);
-    this.follow(model);
+    // While a border is held every move of the pointer draws again: the rows are not built anew.
+    const drag = this.drag;
+    const model = drag && this.last ? this.last : this.model();
+    this.last = model;
+    if (!drag) {
+      this.shown = this.digest(model);
+      this.follow(model);
+    }
     // A copy in the layout decides the order of agent.next / agent.prev; one opened over the
     // window for a moment leaves it to the list that stays.
     if (!this.demo && (given.order ?? !given.overlay)) setAgentOrder(model.order);
@@ -908,10 +957,12 @@ export default class HerdrAgents extends View {
     const width = this.size?.width ?? 640;
     const mode = width < 110 ? "rail" : width < 520 ? "compact" : "table";
     // A column nobody has anything for is left out: no telemetry files, no telemetry columns.
-    const filled = sized(COLUMNS, this.widths).filter((column) => model.rows.some((row) => cellText(row, column.key)));
+    const filled = COLUMNS.filter((column) => model.rows.some((row) => cellText(row, column.key)));
     const room = width - 28 - NAME_MIN - GAP;
-    const keys = new Set(fitColumns(filled, room, GAP));
-    const columns = filled.filter((column) => keys.has(column.key));
+    // A column coming back into room a drag has freed would move the border from under the pointer.
+    const columns = drag
+      ? filled.filter((column) => column.key in drag.shown).map((column) => ({ ...column, width: column.key === drag.key ? drag.now : drag.shown[column.key] }))
+      : fitted(filled, this.widths, room, GAP);
     // What the name has beyond its least: as much as a column can still be widened by.
     const spare = room - columns.reduce((sum, column) => sum + column.width + GAP, -GAP);
 
@@ -950,7 +1001,7 @@ export default class HerdrAgents extends View {
       .child(v_flex().id("herdr-agents-rows").flex_1().min_h(0).pb(8).overflow_y_scrollbar().track_scroll(this.scroll).children(lines.map(draw)))
       // While a border is held, a sheet over everything keeps the pointer's moves and its
       // release from the rows; a release outside the mod is not heard, so the next press ends it.
-      .when(this.drag, (el) => el.child(div().id("herdr-agents-drag").absolute().inset_0().cursor_col_resize()
+      .when(drag, (el) => el.child(div().id("herdr-agents-drag").absolute().inset_0().cursor_col_resize()
         .on_mouse_move((event, cx) => this.dragTo(event, cx))
         .on_mouse_up("left", (_event, cx) => this.dragEnd(cx))
         .on_mouse_down("left", (_event, cx) => { cx.stop_propagation(); this.dragEnd(cx); })));

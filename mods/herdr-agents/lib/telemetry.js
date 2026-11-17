@@ -119,12 +119,12 @@ export function matchTelemetry(terminals, records, procs = null, now = Date.now(
 }
 
 /**
- * "claude-opus-5-5-20261001" -> "opus-5.5": the vendor prefix and a date stamp say nothing in a
- * column, and a version reads as one.
+ * "claude-opus-5-5-20261001" -> "opus-5.5": the vendor prefix and a date stamp (`-20261001`,
+ * `-2026-10-01`) say nothing in a column, and a version reads as one.
  */
 export function shortModel(model) {
   if (!model) return "";
-  return String(model).replace(/^claude-/, "").replace(/-\d{8}$/, "").replace(/-(\d+)-(\d+)(?=$|\[)/, "-$1.$2");
+  return String(model).replace(/^claude-/, "").replace(/-(\d{8}|\d{4}-\d{2}-\d{2})(?=$|\[)/, "").replace(/-(\d{1,2})-(\d{1,2})(?=$|\[)/, "-$1.$2");
 }
 
 /** A record's model and effort as one text: "opus-5.5/xhigh"; either alone when the other is missing. */

@@ -62,10 +62,12 @@ three quarters orange).
 A column no agent has anything for is left out: without telemetry files the five telemetry
 columns are not there. When the block is too narrow for all of them, columns go in this order,
 first to go first: 5h, cost, tab, mem, CPU, PR, git, dir, branch, 7d, ctx, model/effort; status
-stays.
+goes last. A column that does not fit as wide as the person made it is tried at its own width
+before it is given up, so a width set in a wide block cannot hide the column, or the border
+that would put it back, in a narrow one.
 
 Under 520px wide the rows become two lines: icon, name and, right after the name, the fold
-control above; folder, branch with the git marks (none for a clean checkout) and pull request
+control above; folder (a link, as the dir cell is), branch with the git marks (none for a clean checkout) and pull request
 (`#126 ✓` when merged), model/effort, CPU and memory in one `dim` 11px line below, joined by
 ` · ` and cut at the end when too long; the context percent (in its scale color) and the status
 dot on the right. Under 110px it is a rail: a column of
@@ -97,14 +99,21 @@ status dots, 24px each, no headings.
   command of its own the cell is plain text. When `code` cannot be started, a warning toast
   says so. Hovering the cell shows `Open <folder> in VS Code`.
 - **Hover the git cell**: the marks in words, `4 staged, 3 modified · 2 ahead, 1 behind
-  origin/main`; `clean · up to date with origin/main`; `… · no upstream`.
+  origin/main`; `clean · up to date with origin/main`; `… · no upstream`; `… · origin/old is
+  gone` when the upstream it names is not there any more (git then prints no `# branch.ab`
+  line).
 - **Drag a column's left border** (the line before its heading; the pointer becomes a column
   resize one, the line turns `accent` while held): the columns hold to the right edge, so the
   border stays under the pointer, the column right of it gets wider or narrower (28 to 480px),
   everything left of it moves along and the name takes or gives the room; a column grows no
-  further than the name can give (down to its 190px). A double-click on the border gives the
-  column its own width back. The widths are kept in the mod's `localStorage` (`widths`, JSON,
-  column key to px) and read again when the mod opens.
+  further than the name can give (down to its 190px). While the border is held, the columns
+  shown and the other widths stay as they were, and the rows are not built anew for each move.
+  A double-click on the border gives the column its own width back. The widths are kept in
+  `localStorage` (`widths`, JSON, column key to px), which Herdr keeps for each copy of a mod:
+  the copy opened over the window finds its widths again the next time it opens, and a copy in
+  a pane has its own. They are written when the border is let go (or the mod closes with it
+  held), one column at a time after reading what is stored, and read again when the mod opens
+  and at every reading of the processes, so copies that share a store agree.
 - **Hover** a row: `hover` background; over the name (the whole row when it has two lines, the
   dot in the rail shows the name), a tip with the program, the terminal's address, the full
   folder, the branch and pull request, the git marks in words, and the agent's last report.
@@ -131,9 +140,10 @@ status dots, 24px each, no headings.
   `exec(..., { on })` and `readTextFile(..., { on })` for everything read, here or on another
   machine; `watchFolder` for the telemetry folder; `setAgentOrder`; `run("agent.focus",
   { terminal })`; `closeOverlay`; `focused().agent` for the agent the person is in, when no
-  entry of `agents()` is marked `focused`; `hc(["machine", "ls", "--json"])` for how another
-  machine is reached (`target`, and `via` when that is a command, not ssh), asked every 10
-  minutes; `notify` for the toast; `nextCommand` (it has no commands, the loop only ends on
+  entry of `agents()` is marked `focused`; `hc(["machine", "ls", "--json"])` for how the other
+  machines are reached (`target`; not a link when `via` says it is a command, or when it ends
+  in a port, `user@host:2222`), one call for all of them every 10 minutes, again after 30 s
+  when it fails; `notify` for the toast; `nextCommand` (it has no commands, the loop only ends on
   reload); `props`, `home`, `theme`. Element handlers for the resizing: `on_mouse_down("left")`
   on the border (its `click_count` tells the double-click, `position.x` where the drag began),
   `on_mouse_move` and `on_mouse_up("left")` on the root.
@@ -148,12 +158,13 @@ status dots, 24px each, no headings.
     many agents are in it, `git --no-optional-locks status --porcelain=v2 --branch`: its
     `# branch.head` line is the branch (`(detached)`: the first seven characters of
     `# branch.oid`), `# branch.upstream` and `# branch.ab +2 -1` the upstream and how far from
-    it, a `1` or `2` line a changed file (second character of `XY` not `.`: staged; third not
-    `.`: modified), a `u` line a conflict, a `?` line an untracked one. A status is asked again
-    no sooner than 20 times as long as the last one took. Where git is too old for this (the
-    status fails and the next call does not), `git symbolic-ref --short -q HEAD` gives the
-    branch alone (exit 1: a commit is checked out, ask `git rev-parse --short HEAD`), and the
-    status is tried again after 10 minutes.
+    it, a `1` or `2` line a changed file (first character of its `XY` not `.`: staged; second not
+    `.`: modified), a `u` line a conflict, a `?` line an untracked file or folder. A status is
+    asked again no sooner than 20 times as long as the last one took. Where the status cannot
+    be had, `git symbolic-ref --short -q HEAD` gives the branch alone (exit 1: a commit is
+    checked out, ask `git rev-parse --short HEAD`): for one checkout when its status fails or
+    does not answer in 10 s, and for the whole machine, for 10 minutes, when it ends with 129
+    (a git before 2.15, which does not know the options).
   - `code <folder>`, or `code --remote ssh-remote+<target> <folder>`, on this machine, only
     when a dir cell is clicked.
   - `gh pr list --head <branch> --state all --limit 20 --json
@@ -196,11 +207,15 @@ status dots, 24px each, no headings.
   that checkout then fails on the lock: ask with `--no-optional-locks`.
 - Herdr's interface font draws no Nerd Font glyphs (they come out as boxes): the git marks are
   plain characters.
-- A release outside the mod is not heard, so a drag can outlive its press: while a border is
-  held, lay a sheet over the whole mod that takes the moves and the release, and let the next
-  press on it end the drag without reaching a row. Do not end a drag from `on_hover`.
-- A column must not be widened past what the name can give, or the narrow-block rule drops a
-  column in the middle of the drag.
+- Moves and releases are heard only over the mod, and a move does not say whether a button is
+  down. So a release outside the mod is not heard and the column follows the pointer again
+  when it comes back, until the next press. While a border is held, lay a sheet over the whole
+  mod that hears the moves and the release anywhere on it and stops that next press, so it ends
+  the drag and does not reach a row (the sheet cannot stop the rows' hover). Do not end a drag
+  from `on_hover`. Keep what was dragged in `close()` too: the mod can close with a border held.
+- A column must not be widened past what the name can give, and the columns shown must not be
+  fitted again while a border is held: either way a column comes or goes in the middle of the
+  drag and the border leaves the pointer.
 - Each machine reads on its own, so one that is slow or away holds up nobody else. A machine
   with no `ps -axo` (Windows, BusyBox) gets no CPU and memory.
 - A mod folder that is a symlink is not reloaded on save; install a copy.

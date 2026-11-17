@@ -102,6 +102,8 @@ const STATUS = [
   "1 A. N... 000000 100644 100644 0000000 2222222 added.js",
   "1 .D N... 100644 100644 000000 1111111 1111111 deleted.js",
   "2 R. N... 100644 100644 100644 1111111 1111111 R100 new name.js\told name.js",
+  "2 RM N... 100644 100644 100644 1111111 1111111 R090 moved.js\twas.js",
+  "1 .M S.M. 160000 160000 160000 1111111 1111111 vendor/lib",
   "u UU N... 100644 100644 100644 100644 1111111 2222222 3333333 conflict.js",
   "? notes.txt",
   "? scratch/",
@@ -114,17 +116,19 @@ test("STATUS_ARGS asks without taking the index lock an agent's own git may want
 });
 
 test("parseStatus counts what changed and how far the branch is from its upstream", () => {
-  assert.deepEqual(parseStatus(STATUS), { branch: "feat/cart", upstream: "origin/feat/cart", ahead: 2, behind: 1, staged: 4, modified: 3, untracked: 2, conflicts: 1 });
+  assert.deepEqual(parseStatus(STATUS), { branch: "feat/cart", upstream: "origin/feat/cart", gone: false, ahead: 2, behind: 1, staged: 5, modified: 5, untracked: 2, conflicts: 1 });
 });
 
 test("parseStatus: a clean checkout, no upstream, a commit checked out, no commit yet", () => {
-  assert.deepEqual(parseStatus("# branch.oid 9f8e7d6c5b\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n"), { branch: "main", upstream: "origin/main", ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0 });
-  assert.deepEqual(parseStatus("# branch.oid 9f8e7d6c5b\n# branch.head topic\n"), { branch: "topic", upstream: null, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0 });
+  assert.deepEqual(parseStatus("# branch.oid 9f8e7d6c5b\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n"), { branch: "main", upstream: "origin/main", gone: false, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0 });
+  assert.deepEqual(parseStatus("# branch.oid 9f8e7d6c5b\n# branch.head topic\n"), { branch: "topic", upstream: null, gone: false, ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0 });
   assert.equal(parseStatus("# branch.oid 9f8e7d6c5b4a3928\n# branch.head (detached)\n").branch, "@9f8e7d6");
   assert.equal(parseStatus("# branch.oid (initial)\n# branch.head main\n? a.txt\n").branch, "main");
   assert.equal(parseStatus("# branch.oid (initial)\n# branch.head (detached)\n").branch, null);
-  // An upstream that is gone is named, with nothing to count.
-  assert.deepEqual(parseStatus("# branch.oid 9f8e\n# branch.head old\n# branch.upstream origin/old\n").upstream, "origin/old");
+  // An upstream that is gone is named, with nothing to count: git leaves the `branch.ab` line out.
+  const gone = parseStatus("# branch.oid 9f8e\n# branch.head old\n# branch.upstream origin/old\n");
+  assert.deepEqual([gone.upstream, gone.gone, gone.ahead, gone.behind], ["origin/old", true, 0, 0]);
+  assert.equal(statusNote(gone), "clean · origin/old is gone");
   assert.equal(parseStatus(""), null);
   assert.equal(parseStatus(null), null);
 });
@@ -133,20 +137,23 @@ test("statusParts, statusText and statusNote say it short and in words", () => {
   const status = parseStatus(STATUS);
   assert.deepEqual(statusParts(status), [
     { kind: "conflicts", text: "!1" },
-    { kind: "staged", text: "+4" },
-    { kind: "modified", text: "~3" },
+    { kind: "staged", text: "+5" },
+    { kind: "modified", text: "~5" },
     { kind: "untracked", text: "?2" },
     { kind: "ahead", text: "↑2" },
     { kind: "behind", text: "↓1" },
   ]);
-  assert.equal(statusText(status), "!1 +4 ~3 ?2 ↑2 ↓1");
-  assert.equal(statusNote(status), "1 in conflict, 4 staged, 3 modified, 2 untracked · 2 ahead, 1 behind origin/feat/cart");
+  assert.equal(statusText(status), "!1 +5 ~5 ?2 ↑2 ↓1");
+  assert.equal(statusNote(status), "1 in conflict, 5 staged, 5 modified, 2 untracked · 2 ahead, 1 behind origin/feat/cart");
   const clean = parseStatus("# branch.oid 9f8e\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n");
   assert.deepEqual(statusParts(clean), [{ kind: "clean", text: "✓" }]);
   assert.equal(statusNote(clean), "clean · up to date with origin/main");
   const ahead = parseStatus("# branch.oid 9f8e\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +3 -0\n");
   assert.equal(statusText(ahead), "↑3");
   assert.equal(statusNote(ahead), "clean · 3 ahead of origin/main");
+  const behind = parseStatus("# branch.oid 9f8e\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -2\n");
+  assert.equal(statusText(behind), "↓2");
+  assert.equal(statusNote(behind), "clean · 2 behind origin/main");
   assert.equal(statusNote(parseStatus("# branch.oid 9f8e\n# branch.head topic\n? a\n")), "1 untracked · no upstream");
   assert.deepEqual(statusParts(null), []);
   assert.equal(statusText(null), "");
@@ -169,6 +176,10 @@ test("sshTarget finds how a machine is reached in `hc machine ls --json`", () =>
   // Reached with a command of its own: VS Code has no way there.
   assert.equal(sshTarget(listing, "box"), null);
   assert.equal(sshTarget(listing, "nobody"), null);
+  // A port of its own: `ssh-remote+` has no place for it.
+  assert.equal(sshTarget(JSON.stringify({ machines: [{ name: "vps", target: "can@10.0.0.7:2222" }] }), "vps"), null);
+  assert.equal(sshTarget(JSON.stringify({ machines: [{ name: "vps" }, { name: "odd", target: 7 }] }), "vps"), null);
+  assert.equal(sshTarget(JSON.stringify({ machines: [{ name: "odd", target: 7 }] }), "odd"), null);
   assert.equal(sshTarget("not json", "vps"), null);
   assert.equal(sshTarget("{}", "vps"), null);
 });

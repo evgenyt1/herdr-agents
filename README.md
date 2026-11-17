@@ -42,7 +42,9 @@ each agent takes two lines; under 110 px only the status dots stay.
 
 Drag the line before a column's heading to make that column wider or narrower; the name takes
 or gives the room. A double-click on the line gives the column its own width back. The widths
-are kept.
+are kept, for each place the mod is shown: the one opened over the window has them again the
+next time it opens. In a block too narrow for a width you gave, the column has its own width
+again.
 
 ![Two narrow copies and a rail](docs/narrow.png)
 
@@ -99,7 +101,8 @@ looked for every 30 seconds.
 Agents on machines added to Herdr (`hc machine ls`) are listed too. Their processes, git state
 and telemetry folder are read on that machine, every 15 to 30 seconds. A folder on a machine
 reached with ssh opens in VS Code over ssh (`code --remote ssh-remote+<target>`); on a machine
-reached with a command of its own, the folder is not a link.
+reached with a command of its own, or on a port of its own (`user@host:2222`), the folder is
+not a link.
 
 ## Settings
 
@@ -116,11 +119,13 @@ Props, where a layout or a command gives them (`--props '{"refresh": 10}'`):
 
 ## What it runs
 
-In the background, never while drawing: `ps` every 5 seconds, one `git status` every 10 seconds
-for each checkout an agent is in (without taking git's index lock; less often where it is slow,
-so that it stays under a twentieth of one core), and `gh pr list --head <branch>` for each
-branch every 2 minutes (5 when it has no pull request). It only reads. `code` runs when you
-click a folder, and only then. What it has read is kept while Herdr runs, so opening the mod
+In the background, never while drawing: `ps` every 5 seconds; `git rev-parse` once for each
+folder an agent is in, then one `git status` every 10 seconds for each checkout (without taking
+git's index lock; less often where it is slow, so that one checkout's status stays under a
+twentieth of one core; where it does not answer in ten seconds, the branch alone); `gh pr list
+--head <branch>` for each branch every 2 minutes (5 when it has no pull request); and, when
+there are other machines, `hc machine ls --json` every 10 minutes. These only read. `code` runs
+when you click a folder, and only then. What it has read is kept while Herdr runs, so opening the mod
 again shows branches and pull requests at once. Where there is no `ps` that takes `-axo` (Windows,
 BusyBox), CPU and memory stay empty.
 

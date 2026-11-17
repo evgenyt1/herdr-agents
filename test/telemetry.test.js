@@ -169,6 +169,10 @@ test("column helpers", () => {
   assert.equal(shortModel("claude-opus-5-5[1m]"), "opus-5.5[1m]");
   assert.equal(shortModel("claude-opus-5"), "opus-5");
   assert.equal(shortModel("claude-3-5-sonnet-20241022"), "3-5-sonnet");
+  // A date written with dashes is a stamp too, not a version.
+  assert.equal(shortModel("gpt-5-2025-08-07"), "gpt-5");
+  assert.equal(shortModel("gpt-4o-2024-08-06"), "gpt-4o");
+  assert.equal(shortModel("claude-opus-4-1-20250805"), "opus-4.1");
   assert.equal(shortModel("gpt-6.1-sol"), "gpt-6.1-sol");
   assert.equal(shortModel(null), "");
   assert.equal(modelEffort({ model: "claude-opus-5-5", effort: "xhigh" }), "opus-5.5/xhigh");

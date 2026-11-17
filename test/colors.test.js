@@ -6,6 +6,7 @@ test("parseHex reads the notations a theme uses", () => {
   assert.deepEqual(parseHex("#98c379"), [152, 195, 121, 255]);
   assert.deepEqual(parseHex("#0b102466"), [11, 16, 36, 102]);
   assert.deepEqual(parseHex("#fa0"), [255, 170, 0, 255]);
+  assert.deepEqual(parseHex(" #98C379 "), [152, 195, 121, 255]);
   assert.equal(parseHex("rgb(1, 2, 3)"), null);
   assert.equal(parseHex(null), null);
 });
@@ -15,6 +16,7 @@ test("mix goes from one color to the other", () => {
   assert.equal(mix("#000000", "#ffffff", 1), "#ffffff");
   assert.equal(mix("#000000", "#ffffff", 0.5), "#808080");
   assert.equal(mix("#ff0000", "#0000ff", 0.25), "#bf0040");
+  assert.equal(mix("#F00", "#00F", 0.25), "#bf0040");
   assert.equal(mix("#00000080", "#ffffff", 0.5), "#808080c0");
   // Out of range stays at the ends.
   assert.equal(mix("#102030", "#405060", -1), "#102030");
@@ -49,6 +51,9 @@ test("modelLevel ranks a model by its tier", () => {
   assert.equal(level("claude-fable-5-2"), 1);
   assert.equal(level("claude-opus-5-5[1m]"), 0.75);
   assert.equal(level("gpt-6.1-mini"), 0);
+  assert.equal(level("o4-mini"), 0);
+  // A name as people write it.
+  assert.equal(level("Opus 5.5"), 0.75);
   assert.equal(level("gpt-6.1"), 0.5);
   assert.equal(level("gpt-6.1-codex"), 0.5);
   assert.equal(level("gpt-6.1-codex-max"), 1);
