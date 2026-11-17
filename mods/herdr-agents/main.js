@@ -38,7 +38,7 @@ const PUBLISH_MS = 120; // jobs ending close together are drawn once
 const JOB_LOST_MS = 120000; // a job that has not come back by then is given up on
 const DRAG_IDLE_MS = 4000; // a held divider that has not moved for this long is taken as let go
 const GIT_WAIT_MAX_MS = 120000; // however slow git was, a checkout is asked again after this
-const HOLD_MS = 30000; // just opened: the columns of the last time stay until the readings are in, this long at most
+const HOLD_MS = 60000; // just opened: the columns of the last time stay until the readings are in, this long at most
 
 // Processes, branches and pull requests as read from the machines. Plain data, shared by every
 // copy of the mod and kept while the app runs: opened over the window a second time, the
@@ -55,6 +55,7 @@ const newStore = () => ({
   ghOff: new Map(), // machine -> when to try gh again
   homes: new Map(), // another machine -> its home folder
   tele: new Map(), // telemetry folder as given in props ("": the machine's own) -> { records, files }
+  busy: 0, // jobs under way, in all copies together
 });
 const STORE = newStore();
 const URGENCY = { blocked: 4, done: 3, working: 2, idle: 1, unknown: 0 };
@@ -109,7 +110,8 @@ export default class HerdrAgents extends View {
     this.sizeKept = JSON.stringify(this.size);
     this.laid = false; // whether Herdr has said how big this copy is
     this.opened = Date.now();
-    this.settled = false; // whether this copy's first readings are all in
+    this.settled = false; // whether the first readings are all in
+    this.began = false; // whether there was an agent to read anything for
     this.teleRead = false;
     this.folded = new Set();
     this.cursor = null;
@@ -120,6 +122,7 @@ export default class HerdrAgents extends View {
     this.drag = null; // { key, min, x, width, now, at } while a column's divider is held
     this.fit = null; // { key, turn } while a column is measured to fit what is in it
     this.across = 0; // how wide the table was last drawn
+    this.keys = null; // the columns it was last drawn with
     this.turn = 0;
     this.last = null; // the rows as last drawn
     this.loadWidths();
@@ -192,6 +195,8 @@ export default class HerdrAgents extends View {
     const started = Date.now();
     if (started - (this.running.get(name) ?? -Infinity) < JOB_LOST_MS) return;
     this.running.set(name, started);
+    const data = this.data;
+    data.busy++;
     cx.spawn(async (cx) => {
       let changed = false;
       try {
@@ -199,15 +204,20 @@ export default class HerdrAgents extends View {
       } catch (error) {
         console.warn(`herdr-agents: ${name}: ${error}`);
       } finally {
+        data.busy--;
         if (this.running.get(name) === started) this.running.delete(name);
       }
       if (this.settle() || changed) this.later(cx);
     });
   }
 
-  /** Whether the first readings have just all come in: from here on an empty column goes. */
+  /**
+   * Whether the first readings have just all come in: from here on an empty column goes. A
+   * job of this copy that had nothing to do, because another copy is at the same reading,
+   * does not count as that reading being in; nor does a round with no agents to ask about.
+   */
   settle() {
-    if (this.settled || !this.teleRead || this.running.size) return false;
+    if (this.settled || !this.teleRead || !this.began || this.running.size || this.data.busy) return false;
     return (this.settled = true);
   }
 
@@ -228,6 +238,7 @@ export default class HerdrAgents extends View {
   /** Every machine has jobs of its own: one that is slow or away holds up nobody else. */
   tick(cx) {
     const { machines, folders } = this.targets();
+    if (machines.length) this.began = true;
     for (const machine of machines) {
       const key = machine ?? "";
       this.job(`processes ${key}`, cx, () => this.readProcesses(machine));
@@ -992,7 +1003,7 @@ export default class HerdrAgents extends View {
    */
   measure(t, model, fit) {
     const column = fit.key === NAME.key ? NAME : COLUMNS.find((one) => one.key === fit.key);
-    return v_flex().id(`herdr-agents-fit-${fit.key}-${fit.turn}`).absolute().left(0).top(0).opacity(0).items_start().text_size(12.5)
+    return v_flex().id(`herdr-agents-fit-${fit.key}-${fit.turn}`).absolute().left(0).top(0).opacity(0).items_start().whitespace_nowrap().text_size(12.5)
       .on_size_change((size, cx) => this.fitted(fit, size.width, cx))
       .child(div().flex_none().text_size(10.5).child(column.label))
       .children(model.rows.map((row) => (column === NAME ? this.nameCell(t, row, null) : this.cell(t, row, column, true))));
@@ -1112,7 +1123,9 @@ export default class HerdrAgents extends View {
     const mode = width < 110 ? "rail" : width < 520 ? "compact" : "table";
     // The table holds to the left edge: the name, then the columns, each as wide as it was made.
     const live = (column) => (drag?.key === column.key ? { ...column, width: drag.now } : column);
-    const shown = new Set(this.shownColumns(model));
+    // While a divider is held the columns stay: one going would take the divider from under the pointer.
+    if (!drag || !this.keys) this.keys = this.shownColumns(model);
+    const shown = new Set(this.keys);
     const name = live(sized([NAME], this.widths)[0]);
     const columns = sized(COLUMNS.filter((column) => shown.has(column.key)), this.widths).map(live);
     // Wider than the block, the table scrolls sideways; narrower, the rest stays empty. While a

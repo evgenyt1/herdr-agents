@@ -34,7 +34,7 @@ A table row is 26px, with 12px between columns:
 
 | Column | Width | Shows | Color |
 | --- | --- | --- | --- |
-| agent | 230 (120 at least) | tree lines, the program's 14px icon (a picture as it is, a one-color glyph in `muted`), the name (the terminal's name, else its title, else its program), the fold control on a row with helpers, then the title in `dim` when it adds something | `foreground`; `muted` when idle |
+| agent | 200 (120 at least) | tree lines, the program's 14px icon (a picture as it is, a one-color glyph in `muted`), the name (the terminal's name, else its title, else its program), the fold control on a row with helpers, then the title in `dim` when it adds something | `foreground`; `muted` when idle |
 | status | 82 | an 8px dot and `working`, `needs you`, `done` or `idle` | the status color |
 | model/effort | 124 | `opus-5.5/xhigh`: the model without `claude-` and without a date stamp, its version with a dot, then `/` (`dim`) and the effort as the file gives it; either alone when the other is missing. A long model is cut, the effort is not | the model and the effort each on the green-to-red scale below; `muted` when not known |
 | ctx | 38, right | percent of the context window used | the scale: 0 green, 50 yellow, 100 red |
@@ -63,7 +63,7 @@ A column no agent has anything for is left out: without telemetry files the five
 columns are not there.
 
 The table holds to the left edge: the name, then each column at its width, 12px between them.
-All of them at their own widths take 1396px. In a wider block the rest stays empty at the
+All of them at their own widths take 1366px. In a wider block the rest stays empty at the
 right; in a narrower one the headings and rows scroll sideways together (the top bar stays),
 with a scrollbar along the bottom. No column is dropped for want of room.
 
@@ -73,8 +73,10 @@ with a scrollbar along the bottom. No column is dropped for want of room.
   telemetry records (by telemetry folder). A copy opened again draws its first frame from
   them, then reads afresh.
 - The keys of the columns shown are kept in `localStorage` (`shown`). Until a copy's first
-  readings are all in (30 s at most), the columns of the last time stay, empty if need be;
-  after that an empty column goes. So after Herdr starts, or the mod's code is loaded again,
+  readings are all in (a minute at most), the columns of the last time stay, empty if need
+  be; after that an empty column goes. The readings are in when no job is under way in any
+  copy (a copy's own job may have had nothing to do because another copy was at the same
+  reading) and there was an agent to read for. So after Herdr starts, or the mod's code is loaded again,
   the columns stand where they will be and fill in.
 - The copy's size is kept there too (`size`), and the first frame is laid out for it; a copy
   with no size kept draws only its background until Herdr has told it its size.
@@ -203,8 +205,8 @@ status dots, 24px each, no headings.
 - Processes, branches, changes, pull requests, other machines' home folders and how they are
   reached are kept in one object
   for the whole module, so a second copy of the mod, or one opened again, shows them at once
-  and does not ask twice. Telemetry records are kept by each copy: copies may be given
-  different folders.
+  and does not ask twice. Telemetry records are kept there too, by the folder they were read
+  from: copies may be given different folders.
 
 ## Watch out
 
@@ -241,7 +243,8 @@ status dots, 24px each, no headings.
   width its `on_size_change` reports.
 - The headings and the rows scroll sideways as one: both sit in one box as wide as the table
   (the block's width at least) inside the sideways scroll area; the rows scroll up and down
-  inside that box, so the headings stay. The rows' own scrollbar would stand at the table's
+  inside that box, so the headings stay. Every measured cell needs `whitespace_nowrap`, or a
+  text wider than the block wraps and reports the block's width. The rows' own scrollbar would stand at the table's
   right edge, out of sight in a narrow block: give the rows `overflow_y_scroll` and put a
   `Scrollbar.vertical(<the rows' id>)` at the block's right edge, outside the sideways area.
   While a divider is held the box does not get narrower, or a table scrolled sideways slides

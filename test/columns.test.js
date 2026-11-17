@@ -41,11 +41,12 @@ test("dragged: a column's right divider moved right makes it wider", () => {
   assert.equal(dragged(150, -500), MIN_WIDTH);
   assert.equal(dragged(150, 5000), MAX_WIDTH);
   // The name has a least width of its own.
-  assert.equal(dragged(230, -500, NAME.min), NAME.min);
+  assert.equal(dragged(200, -500, NAME.min), NAME.min);
 });
 
-test("with every column at its own width the table fits a 1400 px block", () => {
-  assert.ok(28 + tableWidth(NAME.width, COLUMNS, 12) <= 1400);
+test("with every column at its own width the table fits a 1370 px block", () => {
+  // A pane that has the window to itself, beside Herdr's sidebar, on a 1728 px screen.
+  assert.ok(28 + tableWidth(NAME.width, COLUMNS, 12) <= 1370);
 });
 
 test("tableWidth adds the name, the columns and the gaps before them", () => {

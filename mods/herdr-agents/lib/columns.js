@@ -1,7 +1,7 @@
 // The table's columns and their widths. No host calls.
 
 /** The first column: the agent's name, with its tree lines, icon and title. */
-export const NAME = { key: "name", label: "agent", width: 230, min: 120 };
+export const NAME = { key: "name", label: "agent", width: 200, min: 120 };
 
 /** The columns after the name, in display order. `right`: numbers, set against the right edge. */
 export const COLUMNS = [
