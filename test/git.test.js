@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolvePath, parseRepo, tilde, folderLabel, pickPr, prArgs, STATUS_ARGS, parseStatus, statusParts, statusText, statusNote, codeArgs, sshTarget } from "../mods/herdr-agents/lib/git.js";
+import { resolvePath, parseRepo, tilde, folderLabel, pickPr, prArgs, STATUS_ARGS, parseStatus, statusParts, fitParts, statusText, statusNote, codeArgs, sshTarget } from "../mods/herdr-agents/lib/git.js";
 
 test("resolvePath makes git's relative answers absolute", () => {
   assert.equal(resolvePath("/a/b", ".git"), "/a/b/.git");
@@ -182,4 +182,17 @@ test("sshTarget finds how a machine is reached in `hc machine ls --json`", () =>
   assert.equal(sshTarget(JSON.stringify({ machines: [{ name: "odd", target: 7 }] }), "odd"), null);
   assert.equal(sshTarget("not json", "vps"), null);
   assert.equal(sshTarget("{}", "vps"), null);
+});
+
+test("fitParts: marks that do not fit the cell give way to an ellipsis, whole marks only", () => {
+  const parts = [{ kind: "staged", text: "+12" }, { kind: "modified", text: "~34" }, { kind: "untracked", text: "?15" }, { kind: "ahead", text: "↑2" }, { kind: "behind", text: "↓11" }];
+  // 10 px a character, 5 px between marks.
+  assert.deepEqual(fitParts(parts, 200, 5, 10), parts);
+  assert.deepEqual(fitParts(parts, 160, 5, 10), parts);
+  assert.deepEqual(fitParts(parts, 159, 5, 10).map((part) => part.text), ["+12", "~34", "?15", "↑2", "…"]);
+  assert.deepEqual(fitParts(parts, 84, 5, 10).map((part) => part.text), ["+12", "~34", "…"]);
+  assert.deepEqual(fitParts(parts, 44, 5, 10).map((part) => part.text), ["…"]);
+  assert.equal(fitParts(parts, 84, 5, 10).at(-1).kind, "more");
+  assert.deepEqual(fitParts([{ kind: "clean", text: "✓" }], 28), [{ kind: "clean", text: "✓" }]);
+  assert.deepEqual(fitParts([], 28), []);
 });

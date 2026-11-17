@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { NAME, COLUMNS, MIN_WIDTH, MAX_WIDTH, clampWidth, parseWidths, sized, dragged, tableWidth, parseShown, shownKeys } from "../mods/herdr-agents/lib/columns.js";
+import { NAME, COLUMNS, MIN_WIDTH, MAX_WIDTH, clampWidth, parseWidths, sized, dragged, tableWidth, parseShown, shownKeys, parseSize } from "../mods/herdr-agents/lib/columns.js";
 
 test("the columns stand in the agreed order, after the agent's name", () => {
   assert.equal(NAME.label, "agent");
@@ -72,4 +72,13 @@ test("shownKeys: just opened, the columns of the last time stay, so none comes i
   assert.deepEqual(shownKeys(["status", "git"], ["status", "pr"], true), ["status", "git", "pr"]);
   // Once the readings are in, a column that stayed empty goes.
   assert.deepEqual(shownKeys(["status", "tab"], ["status", "model", "context", "tab", "pr"], false), ["status", "tab"]);
+});
+
+test("parseSize reads a stored size, or nothing", () => {
+  assert.deepEqual(parseSize('{"width": 1380.5, "height": 757, "extra": 1}'), { width: 1380.5, height: 757 });
+  assert.equal(parseSize('{"width": 0, "height": 757}'), null);
+  assert.equal(parseSize('{"width": "wide", "height": 757}'), null);
+  assert.equal(parseSize("null"), null);
+  assert.equal(parseSize("not json"), null);
+  assert.equal(parseSize(null), null);
 });

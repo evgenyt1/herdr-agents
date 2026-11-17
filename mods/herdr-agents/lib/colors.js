@@ -58,5 +58,6 @@ const EFFORTS = { none: 0, minimal: 0, low: 0, medium: 0.25, high: 0.5, xhigh: 0
 
 /** How high an effort is, 0..1, or null for a word (or a number) this does not know. */
 export function effortLevel(effort) {
-  return EFFORTS[String(effort ?? "").toLowerCase()] ?? null;
+  const word = String(effort ?? "").toLowerCase();
+  return Object.hasOwn(EFFORTS, word) ? EFFORTS[word] : null;
 }

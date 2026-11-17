@@ -67,3 +67,7 @@ test("modelLevel ranks a model by its tier", () => {
 test("effortLevel ranks an effort", () => {
   assert.deepEqual(["low", "medium", "high", "xhigh", "max", "XHigh", "minimal", "32000", null].map(effortLevel), [0, 0.25, 0.5, 0.75, 1, 0.75, 0, null, null]);
 });
+
+test("effortLevel: a word that is no effort has no level, whatever it names", () => {
+  for (const word of ["constructor", "__proto__", "toString", "hasOwnProperty", "", null]) assert.equal(effortLevel(word), null, String(word));
+});

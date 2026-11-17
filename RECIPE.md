@@ -41,7 +41,7 @@ A table row is 26px, with 12px between columns:
 | 7d | 36, right | percent of the seven-day limit used | the same |
 | tab | 96 | the tab's name; `tab 2` when the name is only digits (a tab nobody named); `notes · tab 2` when the agent's tab is in another space than the one the row is listed under | `dim` |
 | dir | 150 | the repository's name, then ` › ` and the worktree and the folder below the checkout, those two joined by ` / ` (`webshop › cart-totals / src`); outside a repository the path with home as `~` when it is one or two folders (`~/notes`), else `…/` and the last two. A link | `dim`; under the pointer `foreground` and underlined |
-| git | 84 | what changed in the checkout, as marks with 5px between them, in this order: `!1` files in conflict, `+3` staged, `~1` modified, `?2` untracked, `↑2` commits ahead of the upstream, `↓1` behind it; `✓` alone when none of these | `!` `ansi1` (red), `+` `ansi2` (green), `~` `ansi3` (yellow), `?` `ansi4` (blue), `↑` `ansi6` (cyan), `↓` `ansi5` (magenta), `✓` `ansi2` |
+| git | 84 | what changed in the checkout, as marks with 5px between them, in this order: `!1` files in conflict, `+3` staged, `~1` modified, `?2` untracked, `↑2` commits ahead of the upstream, `↓1` behind it; `✓` alone when none of these. Marks the cell has no room for (7.5px a character, by guess) give way to a `dim` `…`: a mark is shown whole or not at all | `!` `ansi1` (red), `+` `ansi2` (green), `~` `ansi3` (yellow), `?` `ansi4` (blue), `↑` `ansi6` (cyan), `↓` `ansi5` (magenta), `✓` `ansi2` |
 | branch | 136 | the branch; `@9f8e7d6` when a commit is checked out | `muted` |
 | PR | 58 | `#128`; `#126 ✓` when merged, the mark standing outside the number so a long number is cut and the mark is not; nothing when closed | open `accent`, draft `muted`, merged `dim` |
 | CPU | 44, right | `0%`, `3.2%`, `145%`: the load of the agent's process and everything it started, 100% being one core | `muted`; `foreground` from 50% |
@@ -122,7 +122,7 @@ status dots, 24px each, no headings.
   800px; the agent column 120 at least), and the columns right of it move along. The agent
   column has a divider like the others. The rows are not built anew for each move. The drag
   ends when the button goes up over the mod, and also where the pointer leaves the mod: the
-  width it had there is kept.
+  width it had there is kept. A divider that has not moved for 4 s is taken as let go.
 - **Double-click a divider**: the column becomes as wide as the widest thing in it, its
   heading included, plus 2px.
 - The widths are kept in `localStorage` (`widths`, JSON, column key to px; the agent column is
@@ -179,7 +179,8 @@ status dots, 24px each, no headings.
     `# branch.oid`), `# branch.upstream` and `# branch.ab +2 -1` the upstream and how far from
     it, a `1` or `2` line a changed file (first character of its `XY` not `.`: staged; second not
     `.`: modified), a `u` line a conflict, a `?` line an untracked file or folder. A status is
-    asked again no sooner than 20 times as long as the last one took. Where the status cannot
+    asked again no sooner than 20 times as long as the last one took, two minutes at most; after
+    a read that failed, as soon as after any other. Where the status cannot
     be had, `git symbolic-ref --short -q HEAD` gives the branch alone (exit 1: a commit is
     checked out, ask `git rev-parse --short HEAD`): for one checkout when its status fails or
     does not answer in 10 s, and for the whole machine, for 10 minutes, when it ends with 129
@@ -240,7 +241,13 @@ status dots, 24px each, no headings.
   width its `on_size_change` reports.
 - The headings and the rows scroll sideways as one: both sit in one box as wide as the table
   (the block's width at least) inside the sideways scroll area; the rows scroll up and down
-  inside that box, so the headings stay.
+  inside that box, so the headings stay. The rows' own scrollbar would stand at the table's
+  right edge, out of sight in a narrow block: give the rows `overflow_y_scroll` and put a
+  `Scrollbar.vertical(<the rows' id>)` at the block's right edge, outside the sideways area.
+  While a divider is held the box does not get narrower, or a table scrolled sideways slides
+  under the pointer.
+- A pointer that leaves the mod within a frame of the press is not seen leaving. End a drag
+  that has stopped moving for some seconds, and do not act on the first move after that.
 - A name column that takes "the rest", or columns set against the right edge, move whenever a
   column comes or goes. Fixed widths from the left edge do not.
 - Each machine reads on its own, so one that is slow or away holds up nobody else. A machine

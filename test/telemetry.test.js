@@ -175,6 +175,9 @@ test("column helpers", () => {
   assert.equal(shortModel("claude-opus-4-1-20250805"), "opus-4.1");
   assert.equal(shortModel("gpt-6.1-sol"), "gpt-6.1-sol");
   assert.equal(shortModel(null), "");
+  // A month and a day at the end are not a version.
+  assert.equal(shortModel("gemini-2.5-pro-preview-06-05"), "gemini-2.5-pro-preview-06-05");
+  assert.equal(shortModel("claude-opus-4-10"), "opus-4.10");
   assert.equal(modelEffort({ model: "claude-opus-5-5", effort: "xhigh" }), "opus-5.5/xhigh");
   assert.equal(modelEffort({ model: "claude-opus-5-5", effort: null }), "opus-5.5");
   assert.equal(modelEffort({ model: null, effort: "high" }), "high");

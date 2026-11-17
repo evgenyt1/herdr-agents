@@ -158,6 +158,24 @@ export function statusParts(status) {
   return parts.length ? parts : [{ kind: "clean", text: "✓" }];
 }
 
+/**
+ * The marks a cell `width` px wide has room for, by a guess of `char` px a character with
+ * `gap` px between marks; when some do not fit, an ellipsis stands for them (`kind: "more"`).
+ * A mark is shown whole or not at all: a number cut short would read as another number.
+ */
+export function fitParts(parts, width, gap = 5, char = 7.5) {
+  const wide = (part) => part.text.length * char;
+  if (parts.reduce((sum, part, index) => sum + (index ? gap : 0) + wide(part), 0) <= width) return parts;
+  const kept = [];
+  let used = char; // the ellipsis
+  for (const part of parts) {
+    used += wide(part) + gap;
+    if (used > width) break;
+    kept.push(part);
+  }
+  return [...kept, { kind: "more", text: "…" }];
+}
+
 /** The marks as one text: "+4 ~3 ↑2". */
 export const statusText = (status) => statusParts(status).map((part) => part.text).join(" ");
 

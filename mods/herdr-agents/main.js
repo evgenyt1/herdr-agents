@@ -3,15 +3,15 @@
 // the model, effort, context, limits and cost they report. Nothing here needs telemetry to work.
 
 import { View, div, image, svg } from "gpui-kit";
-import { v_flex, h_flex, ScrollHandle } from "gpui-base";
+import { v_flex, h_flex, ScrollHandle, Scrollbar } from "gpui-base";
 import { agents, terminals, spaces, focused, theme, props, run, exec, hc, home, notify, readTextFile, watchFolder, nextCommand, setAgentOrder, closeOverlay } from "herdr";
 import * as fs from "fs/promises";
 import { buildTree, isAgent, splitAddress } from "./lib/tree.js";
 import { PS_ARGS, parsePs, withRates, coarseTimes, childIndex, treeUsage } from "./lib/ps.js";
 import { DIR_SCRIPT, telemetryDir, isTelemetryFile, parseTelemetry, matchTelemetry, shortModel, modelEffort, limitPercent } from "./lib/telemetry.js";
-import { REPO_ARGS, STATUS_ARGS, prArgs, parseRepo, parseStatus, statusParts, statusText, statusNote, codeArgs, sshTarget, pickPr, folderLabel, tilde } from "./lib/git.js";
+import { REPO_ARGS, STATUS_ARGS, prArgs, parseRepo, parseStatus, statusParts, fitParts, statusText, statusNote, codeArgs, sshTarget, pickPr, folderLabel, tilde } from "./lib/git.js";
 import { cpuText, memText, costText, percentText, fitColumns, prText, prNote, countWidth } from "./lib/format.js";
-import { NAME, COLUMNS, clampWidth, parseWidths, sized, dragged, tableWidth, parseShown, shownKeys } from "./lib/columns.js";
+import { NAME, COLUMNS, clampWidth, parseWidths, sized, dragged, tableWidth, parseShown, shownKeys, parseSize } from "./lib/columns.js";
 import { heat, percentLevel, modelLevel, effortLevel } from "./lib/colors.js";
 import { demoData } from "./demo.js";
 
@@ -36,6 +36,8 @@ const CPU_SPAN_MS = 20000; // CPU is the load over about this long
 const CPU_SPAN_COARSE_MS = 60000; // where ps counts CPU time in whole seconds (Linux)
 const PUBLISH_MS = 120; // jobs ending close together are drawn once
 const JOB_LOST_MS = 120000; // a job that has not come back by then is given up on
+const DRAG_IDLE_MS = 4000; // a held divider that has not moved for this long is taken as let go
+const GIT_WAIT_MAX_MS = 120000; // however slow git was, a checkout is asked again after this
 const HOLD_MS = 30000; // just opened: the columns of the last time stay until the readings are in, this long at most
 
 // Processes, branches and pull requests as read from the machines. Plain data, shared by every
@@ -62,6 +64,7 @@ const WORD_WIDTH = 44; // "Agents" in the top bar
 
 const GAP = 12;
 const EDGE = 28; // a row's margins and padding, left and right together
+const HEAD = 20; // the headings' height
 const STATUS_WORD = { working: "working", blocked: "needs you", done: "done", idle: "idle", unknown: "" };
 // The theme color of each mark in the git column.
 const GIT_COLOR = { conflicts: "ansi1", staged: "ansi2", modified: "ansi3", untracked: "ansi4", ahead: "ansi6", behind: "ansi5", clean: "ansi2" };
@@ -73,16 +76,6 @@ async function pool(items, size, work) {
     while (next < items.length) await work(items[next++]);
   };
   await Promise.all(Array.from({ length: Math.min(size, items.length) }, lane));
-}
-
-/** A stored size (JSON text) -> { width, height }, or null. */
-function parseSize(text) {
-  try {
-    const size = JSON.parse(text);
-    return size?.width > 0 && size?.height > 0 ? { width: size.width, height: size.height } : null;
-  } catch {
-    return null;
-  }
 }
 
 const cwdOf = (terminal) => terminal?.foreground?.cwd ?? terminal?.cwd ?? null;
@@ -124,8 +117,9 @@ export default class HerdrAgents extends View {
     this.reveal = null;
     this.lines = [];
     this.widths = {}; // column -> px, as the person dragged them
-    this.drag = null; // { key, min, x, width, now } while a column's divider is held
+    this.drag = null; // { key, min, x, width, now, at } while a column's divider is held
     this.fit = null; // { key, turn } while a column is measured to fit what is in it
+    this.across = 0; // how wide the table was last drawn
     this.turn = 0;
     this.last = null; // the rows as last drawn
     this.loadWidths();
@@ -211,19 +205,23 @@ export default class HerdrAgents extends View {
     });
   }
 
-  /** Redraws shortly, once, however many jobs asked: building the rows is the costly part. */
   /** Whether the first readings have just all come in: from here on an empty column goes. */
   settle() {
     if (this.settled || !this.teleRead || this.running.size) return false;
     return (this.settled = true);
   }
 
+  /** Redraws shortly, once, however many jobs asked: building the rows is the costly part. */
   later(cx) {
     if (this.pending) return;
     this.pending = true;
     cx.timer.after(PUBLISH_MS, (cx) => {
       this.pending = false;
-      if (this.digest(this.model()) !== this.shown) cx.notify();
+      // A held divider keeps the rows as they were; they are built again when it is let go.
+      if (this.drag) return;
+      const model = this.model();
+      this.keepShown(model);
+      if (this.digest(model) !== this.shown) cx.notify();
     });
   }
 
@@ -248,6 +246,7 @@ export default class HerdrAgents extends View {
     if (!this.drag) this.loadWidths();
     if (widths !== JSON.stringify(this.widths)) cx.notify();
     this.keepSize();
+    this.dragIdle(cx);
     for (const key of this.data.procs.keys()) {
       if (machines.some((machine) => (machine ?? "") === key)) continue;
       this.data.procs.delete(key);
@@ -319,17 +318,20 @@ export default class HerdrAgents extends View {
       head.used = now;
       if (now - head.at < head.wait) return;
       head.at = now;
+      const least = machine ? REMOTE_MS * 2 : BRANCH_MS;
       try {
         const read = await this.readHead(machine, top);
         head.branch = read?.branch ?? null;
         head.status = read?.status ?? null;
         head.gone = !read;
+        head.wait = Math.min(GIT_WAIT_MAX_MS, Math.max(least, (Date.now() - now) * SLOW_GIT));
       } catch {
-        // The folder is gone, or the machine is away. Asked again next time.
+        // The folder is gone, or the machine is away. Asked again next time: a read that
+        // failed says nothing about how long a good one takes.
         head.branch = null;
         head.status = null;
+        head.wait = least;
       }
-      head.wait = Math.max(machine ? REMOTE_MS * 2 : BRANCH_MS, (Date.now() - now) * SLOW_GIT);
     });
     let changed = false;
     for (const entry of entries) {
@@ -692,20 +694,28 @@ export default class HerdrAgents extends View {
     this.reveal = here;
   }
 
+  /** Whether the columns of the last time still stand in for readings that are not in yet. */
+  holding() {
+    return !this.settled && Date.now() - this.opened < HOLD_MS;
+  }
+
   /**
    * The columns to show, by key. Just opened, the ones shown the last time stay although the
    * readings that fill them are not in yet: nothing comes in a moment later and moves the rest.
    */
   shownColumns(model) {
-    const filled = COLUMNS.filter((column) => model.rows.some((row) => cellText(row, column.key))).map((column) => column.key);
-    const holding = !this.settled && Date.now() - this.opened < HOLD_MS;
-    const keys = shownKeys(filled, this.remembered, holding);
-    const text = JSON.stringify(keys);
-    if (!holding && !this.demo && model.rows.length && text !== this.shownKept) {
-      this.shownKept = text;
-      this.keep("shown", text);
-    }
-    return keys;
+    // Which columns have something in them is worked out once for each set of rows.
+    model.filled ??= COLUMNS.filter((column) => model.rows.some((row) => cellText(row, column.key))).map((column) => column.key);
+    return shownKeys(model.filled, this.remembered, this.holding());
+  }
+
+  /** Remembers the columns shown, once the readings are in, for the first frame of the next time. */
+  keepShown(model) {
+    if (this.demo || this.holding() || !model.rows.length) return;
+    const text = JSON.stringify(this.shownColumns(model));
+    if (text === this.shownKept) return;
+    this.shownKept = text;
+    this.keep("shown", text);
   }
 
   // The divider on a column's right edge is dragged: the table holds to the left edge, so the
@@ -717,13 +727,17 @@ export default class HerdrAgents extends View {
     // Pressed twice: as wide as what is in it. The column is laid out once at its natural
     // width where nobody sees it, and `fitted` hears how wide that came out.
     if (event.click_count >= 2) this.fit = { key: column.key, turn: ++this.turn };
-    else this.drag = { key: column.key, min: column.min, x: event.position.x, width: column.width, now: column.width };
+    else this.drag = { key: column.key, min: column.min, x: event.position.x, width: column.width, now: column.width, at: Date.now() };
     cx.notify();
   }
 
   dragTo(event, cx) {
     const drag = this.drag;
     if (!drag) return;
+    // A move after a long stillness: the button went up where the mod could not hear it, and
+    // the pointer has come back. The column stays as it was left.
+    if (this.dragIdle(cx)) return;
+    drag.at = Date.now();
     const width = dragged(drag.width, event.position.x - drag.x, drag.min);
     if (width === drag.now) return;
     drag.now = width;
@@ -736,6 +750,13 @@ export default class HerdrAgents extends View {
     this.drag = null;
     if (drag.now !== drag.width) this.storeWidth(drag.key, drag.now);
     cx.notify();
+  }
+
+  /** Ends a drag that has not moved for a while; says whether it did. */
+  dragIdle(cx) {
+    if (!this.drag || Date.now() - this.drag.at < DRAG_IDLE_MS) return false;
+    this.dragEnd(cx);
+    return true;
   }
 
   fitted(fit, width, cx) {
@@ -790,11 +811,10 @@ export default class HerdrAgents extends View {
     }
   }
 
-  /** Keeps one column's width (null: its own again). Read first: a copy sharing the storage may have stored others. */
+  /** Keeps one column's width. Read first: a copy sharing the storage may have stored others. */
   storeWidth(key, width) {
     this.loadWidths();
-    const { [key]: _own, ...rest } = this.widths;
-    this.widths = width == null ? rest : { ...rest, [key]: width };
+    this.widths = { ...this.widths, [key]: width };
     this.keep("widths", JSON.stringify(this.widths));
   }
 
@@ -907,14 +927,14 @@ export default class HerdrAgents extends View {
   cell(t, row, column, natural = false) {
     const text = cellText(row, column.key);
     const id = `${column.key}-${row.address}`;
-    const sized = (el) => (natural ? el.flex_none() : el.id(id).w(column.width).flex_none());
+    const framed = (el) => (natural ? el.flex_none() : el.id(id).w(column.width).flex_none());
     const cut = (el) => (natural ? el.flex_none() : el.min_w(0).truncate());
     if (column.key === "status") {
-      return sized(h_flex()).gap(7).items_center().child(this.dot(t, row.status)).child(cut(div()).text_color(this.cellColor(t, row, "status")).child(text));
+      return framed(h_flex()).gap(7).items_center().child(this.dot(t, row.status)).child(cut(div()).text_color(this.cellColor(t, row, "status")).child(text));
     }
     if (column.key === "pr" && text) {
       // The merged mark stands outside the number, so a long number cannot cut it off.
-      const box = sized(h_flex()).gap(4).text_color(this.cellColor(t, row, "pr"))
+      const box = framed(h_flex()).gap(4).text_color(this.cellColor(t, row, "pr"))
         .child(cut(div()).child(text))
         .when(row.pr.state === "merged", (el) => el.child(div().flex_none().child("✓")));
       if (natural) return box;
@@ -927,18 +947,20 @@ export default class HerdrAgents extends View {
       // The model and the effort each have a color of their own.
       const model = shortModel(row.tele.model);
       const effort = row.tele.effort;
-      return sized(h_flex())
+      return framed(h_flex())
         .when(!natural, (el) => el.overflow_hidden().tooltip(text))
         .when(model, (el) => el.child(cut(div()).text_color(this.cellColor(t, row, "model")).child(model)))
         .when(model && effort, (el) => el.child(div().flex_none().text_color(t.dim).child("/")))
         .when(effort, (el) => el.child(div().flex_none().text_color(this.cellColor(t, row, "effort")).child(effort)));
     }
     if (column.key === "git" && text) {
-      return sized(h_flex()).gap(5)
+      // Marks that do not fit give way to an ellipsis: a number cut short would read as another.
+      const parts = natural ? statusParts(row.git) : fitParts(statusParts(row.git), column.width);
+      return framed(h_flex()).gap(5)
         .when(!natural, (el) => el.overflow_hidden().tooltip(statusNote(row.git)))
-        .children(statusParts(row.git).map((part) => div().flex_none().text_color(t[GIT_COLOR[part.kind]] ?? t.dim).child(part.text)));
+        .children(parts.map((part) => div().flex_none().text_color(t[GIT_COLOR[part.kind]] ?? t.dim).child(part.text)));
     }
-    const box = sized(div()).text_color(this.cellColor(t, row, column.key));
+    const box = framed(div()).text_color(this.cellColor(t, row, column.key));
     if (natural) return box.child(text);
     if (column.key === "dir" && text && row.open) {
       // A link: the folder opens in VS Code.
@@ -960,7 +982,7 @@ export default class HerdrAgents extends View {
           .tooltip("Drag to resize, double-click to fit")
           .on_mouse_down("left", (event, cx) => this.dragStart(column, event, cx))
           .child(div().absolute().left(4).top(3).bottom(3).w(1).bg(this.drag?.key === column.key ? t.accent : t.border)));
-    return h_flex().h(20).flex_none().mx(6).px(8).gap(GAP).items_center().text_size(10.5).text_color(t.dim)
+    return h_flex().h(HEAD).flex_none().mx(6).px(8).gap(GAP).items_center().text_size(10.5).text_color(t.dim)
       .children([name, ...columns].map(heading));
   }
 
@@ -1061,6 +1083,7 @@ export default class HerdrAgents extends View {
     const model = drag && this.last ? this.last : this.model();
     this.last = model;
     if (!drag) {
+      this.keepShown(model);
       this.shown = this.digest(model);
       this.follow(model);
     }
@@ -1092,9 +1115,12 @@ export default class HerdrAgents extends View {
     const shown = new Set(this.shownColumns(model));
     const name = live(sized([NAME], this.widths)[0]);
     const columns = sized(COLUMNS.filter((column) => shown.has(column.key)), this.widths).map(live);
-    // Wider than the block, the table scrolls sideways; narrower, the rest stays empty.
-    const across = Math.max(width, EDGE + tableWidth(name.width, columns, GAP));
-    if (mode !== "table") this.fit = null;
+    // Wider than the block, the table scrolls sideways; narrower, the rest stays empty. While a
+    // divider is held the table does not get narrower: scrolled sideways, it would slide under
+    // the pointer as the room to scroll shrinks.
+    const across = Math.max(width, EDGE + tableWidth(name.width, columns, GAP), drag ? this.across : 0);
+    this.across = across;
+    if (mode !== "table" || !model.rows.length) this.fit = null;
 
     const lines = [];
     for (const group of model.groups) {
@@ -1112,17 +1138,22 @@ export default class HerdrAgents extends View {
       if (mode === "rail") return this.railRow(t, line.row);
       return mode === "compact" ? this.compactRow(t, line.row) : this.tableRow(t, line.row, name, columns);
     };
-    const rows = v_flex().id("herdr-agents-rows").flex_1().min_h(0).pb(8).overflow_y_scrollbar().track_scroll(this.scroll).children(lines.map(draw));
     const none = model.rows.length === 0;
+    const table = mode === "table" && !none;
+    // In the table the rows' scrollbar is drawn apart, at the block's right edge: their own
+    // would stand at the table's, out of sight when the table is wider than the block.
+    const rows = v_flex().id("herdr-agents-rows").flex_1().min_h(0).pb(8).track_scroll(this.scroll).children(lines.map(draw));
 
     return root
       .when(mode !== "rail", (el) => el.child(this.topBar(t, model, mode, width)))
       .when(none && mode !== "rail", (el) => el.child(div().px(14).py(6).text_color(t.dim).child("No agents are running.")))
-      .when(mode !== "table" || none, (el) => el.child(rows))
-      .when(mode === "table" && !none, (el) => el.child(
-        div().id("herdr-agents-table").flex().flex_1().min_h(0).overflow_x_scrollbar()
-          .child(v_flex().flex_none().w(across).child(this.headings(t, name, columns)).child(rows))))
-      .when(this.fit && mode === "table", (el) => el.child(this.measure(t, model, this.fit)))
+      .when(!table, (el) => el.child(rows.overflow_y_scrollbar()))
+      .when(table, (el) => el.child(
+        div().relative().flex().flex_1().min_h(0)
+          .child(div().id("herdr-agents-table").flex().size_full().overflow_x_scrollbar()
+            .child(v_flex().flex_none().w(across).child(this.headings(t, name, columns)).child(rows.overflow_y_scroll())))
+          .child(div().absolute().top(HEAD).right(0).bottom(0).w(12).child(Scrollbar.vertical("herdr-agents-rows").absolute().inset_0()))))
+      .when(this.fit && table, (el) => el.child(this.measure(t, model, this.fit)))
       // While a divider is held, a sheet over everything hears the pointer's moves and its
       // release wherever it is over the mod. A release outside the mod is not heard, and a move
       // does not say whether the button is down: so the drag ends where the pointer leaves the

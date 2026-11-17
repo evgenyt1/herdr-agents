@@ -78,3 +78,13 @@ export function shownKeys(filled, remembered, holding) {
   const keep = new Set(holding ? [...filled, ...remembered] : filled);
   return COLUMNS.filter((column) => keep.has(column.key)).map((column) => column.key);
 }
+
+/** A stored size (JSON text) -> { width, height }, or null. */
+export function parseSize(text) {
+  try {
+    const size = JSON.parse(text);
+    return size?.width > 0 && size?.height > 0 ? { width: size.width, height: size.height } : null;
+  } catch {
+    return null;
+  }
+}
