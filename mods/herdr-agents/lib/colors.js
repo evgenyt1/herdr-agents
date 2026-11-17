@@ -2,6 +2,17 @@
 
 /** "#rgb", "#rrggbb" or "#rrggbbaa" -> [red, green, blue, alpha], each 0..255; else null. */
 export function parseHex(color) {
+  if (!PARSED.has(color)) {
+    // A theme has a few dozen colors; a caller with endless others must not grow this for ever.
+    if (PARSED.size > 500) PARSED.clear();
+    PARSED.set(color, readHex(color));
+  }
+  return PARSED.get(color);
+}
+
+const PARSED = new Map();
+
+function readHex(color) {
   const text = typeof color === "string" ? color.trim() : "";
   const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(text);
   if (short) return [...short.slice(1).map((digit) => parseInt(digit + digit, 16)), 255];

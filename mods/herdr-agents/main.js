@@ -9,7 +9,7 @@ import * as fs from "fs/promises";
 import { buildTree, isAgent, splitAddress, panedTerminals, goCommand } from "./lib/tree.js";
 import { PS_ARGS, parsePs, withRates, coarseTimes, childIndex, treeUsage } from "./lib/ps.js";
 import { DIR_SCRIPT, telemetryDir, isTelemetryFile, parseTelemetry, matchTelemetry, shortModel, modelEffort, limitPercent } from "./lib/telemetry.js";
-import { REPO_ARGS, STATUS_ARGS, prArgs, parseRepo, parseStatus, statusParts, fitParts, statusText, statusNote, codeArgs, sshTarget, pickPr, folderLabel, tilde } from "./lib/git.js";
+import { REPO_ARGS, STATUS_ARGS, prArgs, parseRepo, parseStatus, statusParts, fitParts, partsWidth, statusText, statusNote, codeArgs, sshTarget, pickPr, folderLabel, tilde } from "./lib/git.js";
 import { cpuText, memText, costText, percentText, fitColumns, prText, prNote, countWidth } from "./lib/format.js";
 import { NAME, COLUMNS, clampWidth, parseWidths, sized, dragged, tableWidth, parseShown, shownKeys, parseSize } from "./lib/columns.js";
 import { heat, percentLevel, modelLevel, effortLevel } from "./lib/colors.js";
@@ -36,8 +36,9 @@ const CPU_SPAN_MS = 20000; // CPU is the load over about this long
 const CPU_SPAN_COARSE_MS = 60000; // where ps counts CPU time in whole seconds (Linux)
 const PUBLISH_MS = 120; // jobs ending close together are drawn once
 const JOB_LOST_MS = 120000; // a job that has not come back by then is given up on
-const DRAG_IDLE_MS = 4000; // a held divider that has not moved for this long is taken as let go
+const DRAG_IDLE_MS = 10000; // a held divider that has not moved for this long is taken as let go
 const GIT_WAIT_MAX_MS = 120000; // however slow git was, a checkout is asked again after this
+const BUSY_MS = 30000; // a job older than this no longer says that readings are on their way
 const HOLD_MS = 60000; // just opened: the columns of the last time stay until the readings are in, this long at most
 
 // Processes, branches and pull requests as read from the machines. Plain data, shared by every
@@ -55,7 +56,7 @@ const newStore = () => ({
   ghOff: new Map(), // machine -> when to try gh again
   homes: new Map(), // another machine -> its home folder
   tele: new Map(), // telemetry folder as given in props ("": the machine's own) -> { records, files }
-  busy: 0, // jobs under way, in all copies together
+  busy: new Map(), // jobs under way, in all copies together: token -> when it started
 });
 const STORE = newStore();
 const URGENCY = { blocked: 4, done: 3, working: 2, idle: 1, unknown: 0 };
@@ -78,6 +79,9 @@ async function pool(items, size, work) {
   };
   await Promise.all(Array.from({ length: Math.min(size, items.length) }, lane));
 }
+
+/** The column with that key, the agent's name among them. */
+const columnOf = (key) => (key === NAME.key ? NAME : COLUMNS.find((column) => column.key === key));
 
 const cwdOf = (terminal) => terminal?.foreground?.cwd ?? terminal?.cwd ?? null;
 const rootPids = (terminal) => [terminal?.foreground?.pid, terminal?.pid].filter((pid) => pid > 0);
@@ -132,6 +136,7 @@ export default class HerdrAgents extends View {
     this.handle = cx.focus_handle();
     this.scroll = ScrollHandle.new();
     this.running = new Map(); // job -> when it started
+    this.tokens = new Set(); // this copy's jobs in `busy`
     this.data = STORE;
     // Telemetry is kept by folder, as `telemetryDir` in props may point a copy somewhere else:
     // a copy opened again starts from what the last one read, not from nothing.
@@ -196,7 +201,9 @@ export default class HerdrAgents extends View {
     if (started - (this.running.get(name) ?? -Infinity) < JOB_LOST_MS) return;
     this.running.set(name, started);
     const data = this.data;
-    data.busy++;
+    const token = Symbol(name);
+    data.busy.set(token, started);
+    this.tokens.add(token);
     cx.spawn(async (cx) => {
       let changed = false;
       try {
@@ -204,7 +211,8 @@ export default class HerdrAgents extends View {
       } catch (error) {
         console.warn(`herdr-agents: ${name}: ${error}`);
       } finally {
-        data.busy--;
+        data.busy.delete(token);
+        this.tokens.delete(token);
         if (this.running.get(name) === started) this.running.delete(name);
       }
       if (this.settle() || changed) this.later(cx);
@@ -217,7 +225,10 @@ export default class HerdrAgents extends View {
    * does not count as that reading being in; nor does a round with no agents to ask about.
    */
   settle() {
-    if (this.settled || !this.teleRead || !this.began || this.running.size || this.data.busy) return false;
+    if (this.settled || !this.teleRead || !this.began || this.running.size) return false;
+    // A job that never came back (its copy closed under it, a call that hangs) stops counting.
+    const now = Date.now();
+    for (const started of this.data.busy.values()) if (now - started < BUSY_MS) return false;
     return (this.settled = true);
   }
 
@@ -354,7 +365,9 @@ export default class HerdrAgents extends View {
       if (entry.before !== `${entry.repo?.top} ${entry.repo?.common} ${entry.branch} ${statusText(entry.status)}`) changed = true;
     }
     for (const [key, entry] of data.repos) if (Date.now() - (entry.used ?? 0) > FORGET_MS) data.repos.delete(key);
-    for (const [key, head] of data.heads) if (head.gone || Date.now() - (head.used ?? 0) > FORGET_MS) data.heads.delete(key);
+    // A head marked gone stays until it is forgotten: another reading under way (another
+    // copy, another machine) may not have seen the mark yet.
+    for (const [key, head] of data.heads) if (Date.now() - (head.used ?? 0) > FORGET_MS) data.heads.delete(key);
     return changed;
   }
 
@@ -700,10 +713,13 @@ export default class HerdrAgents extends View {
 
   /** Puts the cursor on the agent the person is in, whenever that changes: keys move from there. */
   follow(model) {
-    const here = model.rows.find((row) => row.listed?.focused)?.address ?? (this.demo ? null : focused()?.agent) ?? null;
+    // The terminal with the keyboard (a helper peeked at has no pane to be marked focused),
+    // else the agent whose pane has the focus, else the one an agent block shows.
+    const at = this.demo ? null : focused();
+    const here = [at?.terminal, model.rows.find((row) => row.listed?.focused)?.address, at?.agent].find((address) => address && model.rows.some((row) => row.address === address)) ?? null;
     if (here === this.here) return;
     this.here = here;
-    if (!here || !model.rows.some((row) => row.address === here)) return;
+    if (!here) return;
     this.cursor = here;
     this.reveal = here;
   }
@@ -759,11 +775,16 @@ export default class HerdrAgents extends View {
   }
 
   dragEnd(cx) {
+    if (this.dragKeep()) cx.notify();
+  }
+
+  /** Lets the divider go and keeps the width it was dragged to; says whether one was held. */
+  dragKeep() {
     const drag = this.drag;
-    if (!drag) return;
+    if (!drag) return false;
     this.drag = null;
     if (drag.now !== drag.width) this.storeWidth(drag.key, drag.now);
-    cx.notify();
+    return true;
   }
 
   /** Ends a drag that has not moved for a while; says whether it did. */
@@ -776,18 +797,21 @@ export default class HerdrAgents extends View {
   fitted(fit, width, cx) {
     if (this.fit !== fit) return;
     this.fit = null;
-    const column = fit.key === NAME.key ? NAME : COLUMNS.find((one) => one.key === fit.key);
+    const column = columnOf(fit.key);
+    // The git marks are shown by a guess of their width: the column must be as wide as the guess.
+    const guessed = column?.key === "git" ? Math.max(0, ...(this.last?.rows ?? []).map((row) => partsWidth(statusParts(row.git)))) : 0;
     // Two px to spare: a width cut to the text's own would end in an ellipsis at some zoom.
-    if (column && width > 0) this.storeWidth(column.key, clampWidth(Math.ceil(width) + 2, column.min));
+    if (column && width > 0) this.storeWidth(column.key, clampWidth(Math.max(Math.ceil(width) + 2, Math.ceil(guessed)), column.min));
     cx.notify();
   }
 
   /** The copy goes while a divider is held (Esc over the window): what was dragged so far is kept. */
   close() {
-    const drag = this.drag;
-    this.drag = null;
-    if (drag && drag.now !== drag.width) this.storeWidth(drag.key, drag.now);
+    this.dragKeep();
     this.keepSize();
+    // Its jobs may never come back: they must not keep the other copies waiting for readings.
+    for (const token of this.tokens) this.data.busy.delete(token);
+    this.tokens.clear();
   }
 
   /** A value kept in this copy's storage, read through `parse`; null when there is none. */
@@ -817,12 +841,9 @@ export default class HerdrAgents extends View {
     this.keep("size", text);
   }
 
+  /** No storage here: the columns keep their own widths, or what was dragged in this copy. */
   loadWidths() {
-    try {
-      this.widths = parseWidths(localStorage.getItem("widths"));
-    } catch {
-      // No storage here: the columns keep their own widths, or what was dragged in this copy.
-    }
+    this.widths = this.stored("widths", parseWidths) ?? this.widths;
   }
 
   /** Keeps one column's width. Read first: a copy sharing the storage may have stored others. */
@@ -1005,7 +1026,7 @@ export default class HerdrAgents extends View {
    * `on_size_change` then says how wide that is. A new id each time, so it is a first layout.
    */
   measure(t, model, fit) {
-    const column = fit.key === NAME.key ? NAME : COLUMNS.find((one) => one.key === fit.key);
+    const column = columnOf(fit.key);
     return v_flex().id(`herdr-agents-fit-${fit.key}-${fit.turn}`).absolute().left(0).top(0).opacity(0).items_start().whitespace_nowrap().text_size(12.5)
       .on_size_change((size, cx) => this.fitted(fit, size.width, cx))
       .child(div().flex_none().text_size(10.5).child(column.label))

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolvePath, parseRepo, tilde, folderLabel, pickPr, prArgs, STATUS_ARGS, parseStatus, statusParts, fitParts, statusText, statusNote, codeArgs, sshTarget } from "../mods/herdr-agents/lib/git.js";
+import { resolvePath, parseRepo, tilde, folderLabel, pickPr, prArgs, STATUS_ARGS, parseStatus, statusParts, fitParts, partsWidth, statusText, statusNote, codeArgs, sshTarget } from "../mods/herdr-agents/lib/git.js";
 
 test("resolvePath makes git's relative answers absolute", () => {
   assert.equal(resolvePath("/a/b", ".git"), "/a/b/.git");
@@ -195,4 +195,13 @@ test("fitParts: marks that do not fit the cell give way to an ellipsis, whole ma
   assert.equal(fitParts(parts, 84, 5, 10).at(-1).kind, "more");
   assert.deepEqual(fitParts([{ kind: "clean", text: "✓" }], 28), [{ kind: "clean", text: "✓" }]);
   assert.deepEqual(fitParts([], 28), []);
+});
+
+test("partsWidth: the room fitParts takes a row of marks to need", () => {
+  const parts = [{ kind: "conflicts", text: "!1" }, { kind: "staged", text: "+3" }, { kind: "ahead", text: "↑2" }];
+  assert.equal(partsWidth(parts, 5, 10), 70);
+  assert.equal(partsWidth([], 5, 10), 0);
+  // A cell made as wide as that shows every mark.
+  assert.deepEqual(fitParts(parts, partsWidth(parts)), parts);
+  assert.equal(fitParts(parts, partsWidth(parts) - 1).at(-1).kind, "more");
 });

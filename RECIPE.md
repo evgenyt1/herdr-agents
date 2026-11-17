@@ -76,7 +76,8 @@ with a scrollbar along the bottom. No column is dropped for want of room.
   readings are all in (a minute at most), the columns of the last time stay, empty if need
   be; after that an empty column goes. The readings are in when no job is under way in any
   copy (a copy's own job may have had nothing to do because another copy was at the same
-  reading) and there was an agent to read for. So after Herdr starts, or the mod's code is loaded again,
+  reading) and there was an agent to read for. A job older than 30 s is not waited
+  for, and a copy that closes takes its jobs off the count: they may never come back. So after Herdr starts, or the mod's code is loaded again,
   the columns stand where they will be and fill in.
 - The copy's size is kept there too (`size`), and the first frame is laid out for it; a copy
   with no size kept draws only its background until Herdr has told it its size.
@@ -99,7 +100,8 @@ status dots, 24px each, no headings.
   `unknown`.
 - **Click a row**, or Enter on the row under the keyboard: Herdr goes to that agent
   (`agent.focus`). An agent without a pane of its own (a helper another agent started in the
-  background with `hc run --bg`) is peeked at over the current tab instead (`terminal.peek`,
+  background with `hc run --bg`, or any other agent this window has no pane for) is peeked at
+  over the current tab instead (`terminal.peek`,
   which has controls to keep it as a tab and to close it); its tip says so. Opened over the
   window, the mod then closes, unless the `stay` prop is set.
 - **Keys**, when the block has the keyboard: Down/`j`, Up/`k`, Home, End move the row marked
@@ -127,9 +129,10 @@ status dots, 24px each, no headings.
   800px; the agent column 120 at least), and the columns right of it move along. The agent
   column has a divider like the others. The rows are not built anew for each move. The drag
   ends when the button goes up over the mod, and also where the pointer leaves the mod: the
-  width it had there is kept. A divider that has not moved for 4 s is taken as let go.
+  width it had there is kept. A divider that has not moved for 10 s is taken as let go.
 - **Double-click a divider**: the column becomes as wide as the widest thing in it, its
-  heading included, plus 2px.
+  heading included, plus 2px; the git column no narrower than the guess that decides which
+  marks are shown, so a fitted column shows them all.
 - The widths are kept in `localStorage` (`widths`, JSON, column key to px; the agent column is
   `name`), which Herdr keeps for each copy of a mod: the copy opened over the window finds its
   widths again the next time it opens, and a copy in a pane has its own. They are written when
@@ -162,8 +165,9 @@ status dots, 24px each, no headings.
   `exec(..., { on })` and `readTextFile(..., { on })` for everything read, here or on another
   machine; `watchFolder` for the telemetry folder; `setAgentOrder`; `run("agent.focus",
   { terminal })` and `run("terminal.peek", { terminal })`; `panes()` to tell which of the two
-  (below); `closeOverlay`; `focused().agent` for the agent the person is in, when no
-  entry of `agents()` is marked `focused`; `hc(["machine", "ls", "--json"])` for how the other
+  (below); `closeOverlay`; for the agent the person is in, `focused().terminal` when it is
+  a row (a helper peeked at), else the entry of `agents()` marked `focused`, else
+  `focused().agent`; `hc(["machine", "ls", "--json"])` for how the other
   machines are reached (`target`; not a link when `via` says it is a command, or when it ends
   in a port, `user@host:2222`), one call for all of them every 10 minutes, again after 30 s
   when it fails; `notify` for the toast; `nextCommand` (it has no commands, the loop only ends on
@@ -229,7 +233,8 @@ status dots, 24px each, no headings.
   folder's name. Git before 2.31 prints `--path-format=absolute` back and answers with relative
   paths.
 - `terminals()` can name parents in a loop; break it at a terminal on the loop.
-- `agent.focus` answers ok and does nothing for a terminal without a pane. Such a terminal is
+- `agent.focus` answers ok and does nothing for a terminal without a pane (seen in Herdr's
+  `main` layout; a layout with an `agent` block was not tried). Such a terminal is
   in `terminals()` and in neither `panes()` nor `agents()`: a row whose address no entry of
   `panes()` has as `terminal` (and `agents()` does not list with a `pane`) gets
   `terminal.peek`.
