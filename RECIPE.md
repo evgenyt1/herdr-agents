@@ -4,7 +4,7 @@ A table of every agent Herdr knows, one row each, on this machine and the others
 doing, whose helper it is, where it sits in the window, the repository, branch and pull request
 it works on, what has changed there, and how much CPU and memory it uses. When the agent's
 session keeps an [agent-telemetry](https://github.com/evgenyt1/agent-telemetry) file, the row
-also shows its model, effort, how full its context is, its limits and its cost. Clicking a row
+also shows its model, effort, how full its context is, and its five-hour limit. Clicking a row
 goes to that agent; clicking its folder opens the folder in VS Code.
 
 ![herdr-agents](preview.png)
@@ -16,8 +16,7 @@ Top to bottom, on the theme's `chrome` background (`popover` when opened over th
 
 1. **Top bar**, 36px, all of it 11.5px: the word "Agents" (`muted`, medium weight), then one
    status dot with a count (`dim`) for each status that has agents, in the order blocked,
-   working, done, idle, then agents Herdr has no status for; on the right, in the table layout
-   only, the totals `CPU 204%  ·  6.1G  ·  $21.55` (`dim`). Agents folded away are counted. A
+   working, done, idle, then agents Herdr has no status for. Agents folded away are counted. A
    bar too narrow for all of it gives up the word first, then counts, the least urgent first:
    no status, idle, working, done; blocked stays longest.
 2. **Column headings**, 20px, 10.5px `dim`, in the table layout and only when there are rows:
@@ -29,6 +28,9 @@ Top to bottom, on the theme's `chrome` background (`popover` when opened over th
    that space's agents as a tree: an agent started by another agent sits under it, 16px further
    in for each level, joined by 1px lines (`input` color; `border` in a theme without it) drawn
    the full row height so they meet between rows.
+4. **Footer**, 26px, in the table and compact layouts. It shows local machine readings, peak
+   agent context usage, local plan limits with reset times, and reported session cost. The
+   bracketed CPU and memory figures count local agent process trees. The footer scrolls sideways.
 
 A table row is 26px, with 12px between columns:
 
@@ -38,7 +40,6 @@ A table row is 26px, with 12px between columns:
 | status | 82 | an 8px dot and `working`, `needs you`, `done` or `idle` | the status color |
 | model/effort | 124 | `opus-5.5/xhigh`: the model without `claude-` and without a date stamp, its version with a dot, then `/` (`dim`) and the effort as the file gives it; either alone when the other is missing. A long model is cut, the effort is not | the model and the effort each on the green-to-red scale below; `muted` when not known |
 | ctx | 38, right | percent of the context window used | the scale: 0 green, 50 yellow, 100 red |
-| 7d | 36, right | percent of the seven-day limit used | the same |
 | tab | 96 | the tab's name; `tab 2` when the name is only digits (a tab nobody named); `notes · tab 2` when the agent's tab is in another space than the one the row is listed under | `dim` |
 | dir | 150 | the repository's name, then ` › ` and the worktree and the folder below the checkout, those two joined by ` / ` (`webshop › cart-totals / src`); outside a repository the path with home as `~` when it is one or two folders (`~/notes`), else `…/` and the last two. A link | `dim`; under the pointer `foreground` and underlined |
 | git | 84 | what changed in the checkout, as marks with 5px between them, in this order: `!1` files in conflict, `+3` staged, `~1` modified, `?2` untracked, `↑2` commits ahead of the upstream, `↓1` behind it; `✓` alone when none of these. Marks the cell has no room for (7.5px a character, by guess) give way to a `dim` `…`: a mark is shown whole or not at all | `!` `ansi1` (red), `+` `ansi2` (green), `~` `ansi3` (yellow), `?` `ansi4` (blue), `↑` `ansi6` (cyan), `↓` `ansi5` (magenta), `✓` `ansi2` |
@@ -47,23 +48,22 @@ A table row is 26px, with 12px between columns:
 | CPU | 44, right | `0%`, `3.2%`, `145%`: the load of the agent's process and everything it started, 100% being one core | `muted`; `foreground` from 50% |
 | mem | 44, right | `84M`, `1.3G` of the same processes | `dim` |
 | 5h | 36, right | percent of the five-hour limit used | the scale, as ctx |
-| cost | 54, right | `$0.42`, `$118` | `dim` |
 
 **The green-to-red scale** is made of the theme's `ansi2` (green), `ansi3` (yellow) and `ansi1`
 (red), never of fixed colors: a level from 0 to 1 is green at 0, yellow at one half, red at 1,
 and between them the two neighbors mixed channel by channel (one quarter is yellow-green,
 three quarters orange).
 
-- A percentage (ctx, 7d, 5h) is its own level: 37% is 0.37.
+- A percentage (ctx, 5h) is its own level: 37% is 0.37.
 - A model, by one word of its name: `haiku`, `mini`, `nano` 0; `sonnet` 0.25; `opus` 0.75;
   `fable`, `mythos`, `max`, `sol` 1; a name with `gpt` or `codex` and none of those words 0.5.
 - An effort: `low` (and `minimal`, `none`) 0, `medium` 0.25, `high` 0.5, `xhigh` 0.75, `max` 1.
 
-A column no agent has anything for is left out: without telemetry files the five telemetry
+A column no agent has anything for is left out: without telemetry files the three telemetry
 columns are not there.
 
 The table holds to the left edge: the name, then each column at its width, 12px between them.
-All of them at their own widths take 1366px. In a wider block the rest stays empty at the
+All of them at their own widths take 1252px. In a wider block the rest stays empty at the
 right; in a narrower one the headings and rows scroll sideways together (the top bar stays),
 with a scrollbar along the bottom. No column is dropped for want of room.
 
@@ -282,7 +282,7 @@ status dots, 24px each, no headings.
 - With `--props '{"demo": true}'` it shows nine agents in three spaces, one of them on another
   machine, with every status, a three-level tree and all the telemetry columns.
 - With real agents and no telemetry folder, every row has its status, tab, dir, git, branch,
-  CPU and memory, and there is no model/effort, ctx, 7d, 5h or cost column.
+  CPU and memory, and there is no model/effort, ctx or 5h column.
 - A file changed in an agent's checkout shows in its git cell within about ten seconds.
 - Writing a telemetry file for a running agent adds its figures to that row within a second;
   removing it takes them away.

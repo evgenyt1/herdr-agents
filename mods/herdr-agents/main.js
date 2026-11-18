@@ -7,12 +7,13 @@ import { v_flex, h_flex, ScrollHandle, Scrollbar } from "gpui-base";
 import { agents, terminals, panes, spaces, focused, theme, props, run, exec, hc, home, notify, readTextFile, watchFolder, nextCommand, setAgentOrder, closeOverlay } from "herdr";
 import * as fs from "fs/promises";
 import { buildTree, isAgent, splitAddress, panedTerminals, goCommand } from "./lib/tree.js";
-import { PS_ARGS, parsePs, withRates, coarseTimes, childIndex, treeUsage } from "./lib/ps.js";
+import { PS_ARGS, parsePs, withRates, coarseTimes, childIndex, forestUsage, treeUsage } from "./lib/ps.js";
 import { DIR_SCRIPT, telemetryDir, isTelemetryFile, parseTelemetry, matchTelemetry, shortModel, modelEffort, limitPercent } from "./lib/telemetry.js";
 import { REPO_ARGS, STATUS_ARGS, prArgs, parseRepo, parseStatus, statusParts, fitParts, partsWidth, statusText, statusNote, codeArgs, sshTarget, pickPr, folderLabel, tilde } from "./lib/git.js";
 import { cpuText, memText, costText, percentText, fitColumns, prText, prNote, countWidth } from "./lib/format.js";
 import { NAME, COLUMNS, clampWidth, parseWidths, sized, dragged, tableWidth, parseShown, shownKeys, parseSize } from "./lib/columns.js";
 import { heat, percentLevel, modelLevel, effortLevel } from "./lib/colors.js";
+import { MACHINE_SCRIPT, THERMAL_ARGS, MACMON_ARGS, parseMachine, parseThermal, parseMacmon, machineCpu, plansOf, footerItems } from "./lib/machine.js";
 import { demoData } from "./demo.js";
 
 // How often things are asked, in ms. Process figures: `refresh` in props (seconds).
@@ -40,6 +41,7 @@ const DRAG_IDLE_MS = 10000; // a held divider that has not moved for this long i
 const GIT_WAIT_MAX_MS = 120000; // however slow git was, a checkout is asked again after this
 const BUSY_MS = 30000; // a job older than this no longer says that readings are on their way
 const HOLD_MS = 60000; // just opened: the columns of the last time stay until the readings are in, this long at most
+const MACMON_OFF_MS = 600000; // macmon is not installed: looked for again after this
 
 // Processes, branches and pull requests as read from the machines. Plain data, shared by every
 // copy of the mod and kept while the app runs: opened over the window a second time, the
@@ -57,6 +59,9 @@ const newStore = () => ({
   homes: new Map(), // another machine -> its home folder
   tele: new Map(), // telemetry folder as given in props ("": the machine's own) -> { records, files }
   busy: new Map(), // jobs under way, in all copies together: token -> when it started
+  // This machine, for the footer: parseMachine's, macOS's thermal state as last asked (asked
+  // again when the pressure level changes), macmon's sensors, the highest clock seen.
+  machine: { stats: null, at: 0, heat: null, level: null, sensors: null, sensorsAt: 0, clockTop: 0, macmonOff: 0 },
 });
 const STORE = newStore();
 const URGENCY = { blocked: 4, done: 3, working: 2, idle: 1, unknown: 0 };
@@ -101,8 +106,6 @@ function cellText(row, key) {
     case "model": return modelEffort(row.tele);
     case "context": return percentText(row.tele?.context?.percent);
     case "five": return percentText(limitPercent(row.tele, "five_hour"));
-    case "seven": return percentText(limitPercent(row.tele, "seven_day"));
-    case "cost": return costText(row.tele?.cost);
     default: return "";
   }
 }
@@ -167,6 +170,7 @@ export default class HerdrAgents extends View {
       this.data.repos = demo.repos;
       this.data.reach = demo.reach;
       this.data.prs = demo.prs;
+      this.data.machine = { ...this.data.machine, ...demo.machine };
       return;
     }
 
@@ -261,6 +265,10 @@ export default class HerdrAgents extends View {
       });
       if (machine) this.job(`telemetry ${key}`, cx, () => this.readRemoteTelemetry(machine));
     }
+    // The footer's machine is this one, agents on it or not.
+    if (!machines.includes(null)) this.job("processes ", cx, () => this.readProcesses(null));
+    this.job("machine", cx, () => this.readMachine());
+    this.job("sensors", cx, () => this.readSensors());
     const others = machines.filter(Boolean);
     if (others.length) this.job("reach", cx, () => this.readReach(others));
     // A copy sharing this one's storage may have stored new widths.
@@ -270,7 +278,7 @@ export default class HerdrAgents extends View {
     this.keepSize();
     this.dragIdle(cx);
     for (const key of this.data.procs.keys()) {
-      if (machines.some((machine) => (machine ?? "") === key)) continue;
+      if (!key || machines.some((machine) => (machine ?? "") === key)) continue;
       this.data.procs.delete(key);
       this.data.readings.delete(key);
     }
@@ -303,6 +311,55 @@ export default class HerdrAgents extends View {
     data.readings.set(key, [...kept, { at, table: raw }]);
     data.procs.set(key, { table, index: childIndex(table), at });
     return true;
+  }
+
+  /** This machine's memory, load, swap, heat and battery, for the footer. Answers whether any changed. */
+  async readMachine() {
+    const held = this.data.machine;
+    if (Date.now() - held.at < 2000) return false;
+    held.at = Date.now();
+    let stats = null;
+    try {
+      const out = await exec("sh", ["-c", MACHINE_SCRIPT], { timeout: 10000 });
+      stats = parseMachine(out.stdout);
+    } catch {
+      // No sh (Windows): the footer has the processors and the plans alone.
+    }
+    // The thermal state follows the pressure level, which is cheap to read but counts on a
+    // scale of its own: the state is asked only when the level has changed.
+    if (stats?.thermal != null && stats.thermal !== held.level) {
+      try {
+        const out = await exec("osascript", THERMAL_ARGS, { timeout: 10000 });
+        const state = parseThermal(out.stdout);
+        if (state != null) {
+          held.heat = state;
+          held.level = stats.thermal;
+        }
+      } catch {
+        // Asked again next time.
+      }
+    }
+    const before = JSON.stringify(held.stats);
+    held.stats = stats;
+    return JSON.stringify(stats) !== before;
+  }
+
+  /** The processors' clock, temperature, power and fans, where macmon is installed. */
+  async readSensors() {
+    const held = this.data.machine;
+    const now = Date.now();
+    if (now < held.macmonOff || now - held.sensorsAt < 4000) return false;
+    held.sensorsAt = now;
+    try {
+      const out = await exec("macmon", MACMON_ARGS, { timeout: 10000 });
+      held.sensors = out.code === 0 ? parseMacmon(out.stdout) : null;
+    } catch (error) {
+      held.sensors = null;
+      // Not installed (most machines): looked for again now and then, not every few seconds.
+      if (/cannot run macmon\b|not found|no such file/i.test(String(error))) held.macmonOff = Date.now() + MACMON_OFF_MS;
+    }
+    if (held.sensors?.clock > held.clockTop) held.clockTop = held.sensors.clock;
+    return held.sensors != null;
   }
 
   /**
@@ -608,7 +665,8 @@ export default class HerdrAgents extends View {
     const source = demo ?? { terminals: terminals(), agents: agents(), spaces: spaces() };
     const tree = buildTree(source.terminals, source.agents, source.spaces, this.folded);
     // agent.next and agent.prev go by the whole tree: folding a row here must not reorder them.
-    const order = (this.folded.size ? buildTree(source.terminals, source.agents, source.spaces) : tree).rows.map((row) => row.address);
+    const whole = this.folded.size ? buildTree(source.terminals, source.agents, source.spaces) : tree;
+    const order = whole.rows.map((row) => row.address);
     const houseOf = (key) => demo?.home ?? (key ? this.data.homes.get(key) ?? null : home());
     const spaceName = new Map((source.spaces ?? []).map((space) => [space.id, space.name]));
     // Which agents have a pane to go to; the rest (helpers started in the background) are peeked at.
@@ -616,7 +674,8 @@ export default class HerdrAgents extends View {
 
     const telemetry = new Map();
     const perMachine = new Map();
-    for (const row of tree.rows) {
+    // The whole tree, folded rows too: the footer's cost counts them.
+    for (const row of whole.rows) {
       const key = row.machine ?? "";
       if (!perMachine.has(key)) perMachine.set(key, []);
       perMachine.get(key).push({ address: row.address, id: row.id, pids: rootPids(row.terminal), created: row.terminal.created_ms ?? null });
@@ -629,14 +688,32 @@ export default class HerdrAgents extends View {
       for (const [address, record] of matchTelemetry(list, this.tele.records.get(key), table)) telemetry.set(address, record);
     }
 
+    const usageOf = (row) => {
+      const procs = this.data.procs.get(row.machine ?? "");
+      const pids = rootPids(row.terminal);
+      return procs ? treeUsage(procs.table, pids[0], procs.index) ?? treeUsage(procs.table, pids[1], procs.index) : null;
+    };
+    const local = this.data.procs.get("");
+    const roots = new Set();
+    let cost = 0;
+    let context = null;
+    for (const row of whole.rows) {
+      const record = telemetry.get(row.address);
+      cost += record?.cost ?? 0;
+      if (record?.context?.percent != null) context = Math.max(context ?? 0, record.context.percent);
+      if (!row.machine && local) {
+        const root = rootPids(row.terminal).find((pid) => local.table.has(pid));
+        if (root != null) roots.add(root);
+      }
+    }
+    const usage = roots.size ? forestUsage(local.table, roots, local.index) : null;
+
     const groups = tree.groups.map((group) => ({
       ...group,
       rows: group.rows.map((row) => {
         const key = row.machine ?? "";
         const terminal = row.terminal;
-        const procs = this.data.procs.get(key);
-        const pids = rootPids(terminal);
-        const usage = procs ? treeUsage(procs.table, pids[0], procs.index) ?? treeUsage(procs.table, pids[1], procs.index) : null;
+        const usage = usageOf(row);
         const cwd = cwdOf(terminal);
         const house = houseOf(key);
         const checkout = this.data.repos.get(`${key}\n${cwd}`);
@@ -669,12 +746,34 @@ export default class HerdrAgents extends View {
         };
       }),
     }));
-    return { groups, rows: groups.flatMap((group) => group.rows), order };
+    return { groups, rows: groups.flatMap((group) => group.rows), order, foot: this.foot({ usage, context, cost }, source.terminals) };
+  }
+
+  /** What the footer says, and the agents' icons for the plans. */
+  foot({ usage, context, cost }, terminalList) {
+    const held = this.data.machine;
+    const stats = held.stats ? { ...held.stats, heat: held.heat, sensors: held.sensors } : { sensors: held.sensors };
+    const cores = stats.cores ?? null;
+    const items = footerItems({
+      machine: stats,
+      cpu: machineCpu(this.data.procs.get("")?.table, cores),
+      agents: usage,
+      context,
+      clockTop: held.clockTop,
+      plans: plansOf(this.tele.records.get("")),
+      cost,
+    }, { memText, costText });
+    const icons = new Map();
+    for (const terminal of terminalList ?? []) {
+      const program = terminal.program;
+      if (program?.key && program.icon && !icons.has(program.key)) icons.set(program.key, program);
+    }
+    return { items, icons };
   }
 
   /** Everything a redraw would show differently, as one string. */
   digest(model) {
-    return this.shownColumns(model).join(",") + "\n" + model.rows.map((row) => [row.address, row.depth, row.name, row.title, ...COLUMNS.map((column) => cellText(row, column.key)), row.pr?.state ?? "", row.open?.host ?? (row.open ? "here" : ""), row.go?.name ?? "", row.hidden.join(",")].join("\t")).join("\n");
+    return this.shownColumns(model).join(",") + "\n" + model.foot.items.map((item) => `${item.key} ${item.label} ${item.value} ${item.extra ?? ""} ${item.level ?? ""} ${item.tip}`).join(" ") + "\n" + model.rows.map((row) => [row.address, row.depth, row.name, row.title, ...COLUMNS.map((column) => cellText(row, column.key)), row.pr?.state ?? "", row.open?.host ?? (row.open ? "here" : ""), row.go?.name ?? "", row.hidden.join(",")].join("\t")).join("\n");
   }
 
   /** Opened over the window, the mod goes away once it has taken the person somewhere. */
@@ -898,7 +997,6 @@ export default class HerdrAgents extends View {
       case "status": return t[row.status] ?? t.dim;
       case "context": return heat(scale, percentLevel(row.tele?.context?.percent)) ?? t.muted;
       case "five": return heat(scale, percentLevel(limitPercent(row.tele, "five_hour"))) ?? t.muted;
-      case "seven": return heat(scale, percentLevel(limitPercent(row.tele, "seven_day"))) ?? t.muted;
       case "model": return heat(scale, modelLevel(row.tele?.model)) ?? t.muted;
       case "effort": return heat(scale, effortLevel(row.tele?.effort)) ?? t.muted;
       case "pr": return row.pr?.state === "open" ? t.accent : row.pr?.state === "draft" ? t.muted : t.dim;
@@ -1088,14 +1186,10 @@ export default class HerdrAgents extends View {
       .when(group.machine, (el) => el.child(div().flex_none().px(5).rounded(4).bg(t.raised).text_color(t.muted).child(group.machine)));
   }
 
-  topBar(t, model, mode, width) {
+  topBar(t, model, width) {
     const count = {};
     // Agents folded away count too: one of them may need the person.
     for (const status of model.rows.flatMap((row) => [row.status, ...row.hidden])) count[status] = (count[status] ?? 0) + 1;
-    const cpu = model.rows.reduce((sum, row) => sum + (row.usage?.cpu ?? 0), 0);
-    const rss = model.rows.reduce((sum, row) => sum + (row.usage?.rss ?? 0), 0);
-    const cost = model.rows.reduce((sum, row) => sum + (row.tele?.cost ?? 0), 0);
-    const totals = [rss ? `CPU ${cpuText(cpu)}` : "", rss ? memText(rss) : "", cost ? costText(cost) : ""].filter(Boolean).join("  ·  ");
     // What the bar has room for: the counts first, the most urgent longest, then the word.
     const gap = 12;
     const room = width - 28;
@@ -1106,8 +1200,33 @@ export default class HerdrAgents extends View {
       .when(used + WORD_WIDTH <= room, (el) => el.child(div().flex_none().font_medium().text_color(t.muted).child("Agents")))
       .children(kept.map((status) =>
         h_flex().flex_none().gap(5).items_center().child(this.dot(t, status)).child(div().text_color(t.dim).child(String(count[status])))))
-      .child(div().flex_1())
-      .when(mode === "table" && totals, (el) => el.child(div().flex_none().text_color(t.dim).child(totals)));
+      .child(div().flex_1());
+  }
+
+  /**
+   * The machine and the plans in a line, as wb's footer: each value after its label, colored
+   * by how far it has climbed; its tip says what it is. Too long for the block, it scrolls sideways.
+   */
+  footer(t, foot) {
+    const scale = [t.ansi2, t.ansi3, t.ansi1];
+    const parts = [];
+    foot.items.forEach((item, index) => {
+      if (index && item.group) parts.push(div().flex_none().w(1).h(12).mx(4).bg(t.border));
+      const program = item.agent ? foot.icons.get(item.agent) : null;
+      // A plan's first window bears the agent's icon, or its name where no agent of it is listed.
+      const mark = item.agent && item.group
+        ? program
+          ? program.tint ? svg(program.icon).size(12).flex_none().text_color(t.muted) : image(program.icon).w(12).h(12).flex_none()
+          : div().flex_none().text_color(t.muted).child(item.agent)
+        : null;
+      parts.push(h_flex().id(`foot-${item.key}`).flex_none().gap(4).items_center().tooltip(item.tip)
+        .when(mark, (el) => el.child(mark))
+        .when(item.label, (el) => el.child(div().flex_none().text_color(t.dim).child(item.label)))
+        .child(div().flex_none().text_color(item.level == null ? t.muted : heat(scale, item.level) ?? t.muted).child(item.value))
+        .when(item.extra, (el) => el.child(div().flex_none().text_color(t.dim).child(item.extra))));
+    });
+    return div().id("herdr-agents-foot").flex().flex_none().h(26).border_t(1).border_color(t.border).overflow_x_scroll()
+      .child(h_flex().flex_none().h_full().px(14).gap(12).items_center().whitespace_nowrap().text_size(11).children(parts));
   }
 
   render() {
@@ -1182,7 +1301,7 @@ export default class HerdrAgents extends View {
     const rows = v_flex().id("herdr-agents-rows").flex_1().min_h(0).pb(8).track_scroll(this.scroll).children(lines.map(draw));
 
     return root
-      .when(mode !== "rail", (el) => el.child(this.topBar(t, model, mode, width)))
+      .when(mode !== "rail", (el) => el.child(this.topBar(t, model, width)))
       .when(none && mode !== "rail", (el) => el.child(div().px(14).py(6).text_color(t.dim).child("No agents are running.")))
       .when(!table, (el) => el.child(rows.overflow_y_scrollbar()))
       .when(table, (el) => el.child(
@@ -1190,6 +1309,7 @@ export default class HerdrAgents extends View {
           .child(div().id("herdr-agents-table").flex().size_full().overflow_x_scrollbar()
             .child(v_flex().flex_none().w(across).child(this.headings(t, name, columns)).child(rows.overflow_y_scroll())))
           .child(div().absolute().top(HEAD).right(0).bottom(0).w(12).child(Scrollbar.vertical("herdr-agents-rows").absolute().inset_0()))))
+      .when(mode !== "rail", (el) => el.child(this.footer(t, model.foot)))
       .when(this.fit && table, (el) => el.child(this.measure(t, model, this.fit)))
       // While a divider is held, a sheet over everything hears the pointer's moves and its
       // release wherever it is over the mod. A release outside the mod is not heard, and a move

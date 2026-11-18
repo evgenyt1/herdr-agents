@@ -30,16 +30,20 @@ With agent-telemetry, for each terminal a file matches:
 | --- | --- |
 | model/effort | The model of the last request and its reasoning effort, as `opus-5.5/xhigh`. Each has a color of its own, from green to red: the model by its size (haiku or mini, sonnet, opus, fable; for Codex mini, the plain model, max or sol), the effort from low to max. |
 | ctx | How full the context is, from green at 0% through yellow at 50% to red at 100%. |
-| 7d, 5h | How much of the seven-day and five-hour limits is used, in the same colors. |
-| cost | What the session has cost so far. |
+| 5h | How much of the five-hour limit is used, in the same colors. |
 
 The colors are the theme's own green, yellow and red and what lies between them.
 
-The columns stand in this order: status, model/effort, ctx, 7d, tab, dir, git, branch, PR, CPU,
-mem, 5h, cost. A column nobody has anything for is left out, so without telemetry files there
+The columns stand in this order: status, model/effort, ctx, tab, dir, git, branch, PR, CPU,
+mem, 5h. A column nobody has anything for is left out, so without telemetry files there
 are no telemetry columns. The table starts at the left edge; in a block too narrow for it, it
 scrolls sideways, and in a wider one the rest stays empty. Under 520 px each agent takes two
 lines; under 110 px only the status dots stay.
+
+The footer shows local CPU and memory, available system readings, the highest context usage,
+plan limits (including 7d) with reset times, and the total reported cost of the listed sessions.
+The CPU and memory figures in brackets cover agents on the local machine. The footer scrolls
+sideways when it exceeds the available width.
 
 Drag the line at the right edge of a heading, the agent's too, to make that column wider or
 narrower; the columns right of it move along. A double-click on the line makes the column as

@@ -157,6 +157,7 @@ test("matchTelemetry: a file written before the terminal was made is not that te
   // The id was given out again: the old session's file names t1, and its time says it is older.
   assert.equal(matchTelemetry(terms, [rec(null, "t1", { updatedAt: 4000 })], PROCS, 6000).size, 0);
   assert.equal(matchTelemetry(terms, [rec(null, "t1", { updatedAt: 5500 })], PROCS, 6000).size, 1);
+  assert.equal(matchTelemetry([{ ...terms[0], created: 5200 }], [rec(null, "t1", { updatedAt: 5000 })], PROCS, 6000).size, 1);
   // A live process still counts where it runs, whatever id the file carries.
   const moved = matchTelemetry(terms, [rec(21, "t1", { updatedAt: 4000 })], PROCS, 6000);
   assert.deepEqual([...moved.keys()], ["t2"]);

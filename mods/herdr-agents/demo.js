@@ -128,5 +128,13 @@ export function demoData() {
     ["\n/home/dev/src/webshop/.git\nfeat/email-receipts", pr(126, "merged")],
     [`vps\n${api}/.git\nrate-limit`, pr(57, "open")],
   ]);
-  return { terminals, agents, spaces, procs, records, repos, prs, reach, home: "/home/dev" };
+  // The machine the app runs on, for the footer: a laptop on its battery, warm, with macmon.
+  const machine = {
+    stats: { cores: 12, memory: 36 * 1024 ** 3, load: 7.4, free: 38, pressure: 1, swap: 2.1 * 1024 ** 3, thermal: 1, battery: 64, plugged: false },
+    heat: 1,
+    level: 1,
+    sensors: { clock: 3900, busy: 0.4, degrees: 71, watts: 18, fan: 2400, fanTop: 6000 },
+    clockTop: 4500,
+  };
+  return { terminals, agents, spaces, procs, records, repos, prs, reach, machine, home: "/home/dev" };
 }

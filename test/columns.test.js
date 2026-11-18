@@ -4,7 +4,7 @@ import { NAME, COLUMNS, MIN_WIDTH, MAX_WIDTH, clampWidth, parseWidths, sized, dr
 
 test("the columns stand in the agreed order, after the agent's name", () => {
   assert.equal(NAME.label, "agent");
-  assert.deepEqual(COLUMNS.map((column) => column.label), ["status", "model/effort", "ctx", "7d", "tab", "dir", "git", "branch", "PR", "CPU", "mem", "5h", "cost"]);
+  assert.deepEqual(COLUMNS.map((column) => column.label), ["status", "model/effort", "ctx", "tab", "dir", "git", "branch", "PR", "CPU", "mem", "5h"]);
 });
 
 test("every column has a key and a width of its own within the bounds", () => {

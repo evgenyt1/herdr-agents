@@ -106,7 +106,9 @@ export function matchTelemetry(terminals, records, procs = null, now = Date.now(
     if (record.pid == null ? written != null && now - written > NO_PID_LIVE_MS : procs && !procs.has(record.pid)) continue;
     const above = record.pid == null ? null : procs ? nearestRoot(procs, record.pid, byPid) : byPid.has(record.pid) ? { root: record.pid, depth: 0 } : null;
     const named = record.hc ? byId.get(record.hc) : null;
-    const earlier = named && written != null && named.created != null && written < named.created;
+    // The v1 writers can truncate timestamps to seconds.
+    const lastPossibleWrite = written != null && written % 1000 === 0 ? written + 999 : written;
+    const earlier = named && lastPossibleWrite != null && named.created != null && lastPossibleWrite < named.created;
     const terminal = (named && !earlier ? named : null) || (above && byPid.get(above.root));
     if (!terminal) continue;
     // How far below this terminal's own program the session runs; unknown sorts last.

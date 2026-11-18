@@ -74,8 +74,13 @@ export function childIndex(table) {
  */
 export function treeUsage(table, root, index = childIndex(table)) {
   if (!table.has(root)) return null;
+  return forestUsage(table, [root], index);
+}
+
+/** CPU and memory of multiple process trees, counting shared descendants once. */
+export function forestUsage(table, roots, index = childIndex(table)) {
   const seen = new Set();
-  const todo = [root];
+  const todo = [...roots];
   let cpu = 0;
   let rss = 0;
   while (todo.length) {

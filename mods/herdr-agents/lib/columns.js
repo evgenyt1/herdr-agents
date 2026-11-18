@@ -8,7 +8,6 @@ export const COLUMNS = [
   { key: "status", label: "status", width: 82 },
   { key: "model", label: "model/effort", width: 124 },
   { key: "context", label: "ctx", width: 38, right: true },
-  { key: "seven", label: "7d", width: 36, right: true },
   { key: "tab", label: "tab", width: 96 },
   { key: "dir", label: "dir", width: 150 },
   { key: "git", label: "git", width: 84 },
@@ -17,7 +16,6 @@ export const COLUMNS = [
   { key: "cpu", label: "CPU", width: 44, right: true },
   { key: "mem", label: "mem", width: 44, right: true },
   { key: "five", label: "5h", width: 36, right: true },
-  { key: "cost", label: "cost", width: 54, right: true },
 ];
 
 /** The narrowest and the widest a person can make a column, in px. A column may name a `min` of its own. */
