@@ -90,6 +90,42 @@ To have it in place of Herdr's agents list, duplicate the layout and point the b
 `herdr-app do layout.clone '{"name":"main","as":"mine"}'`, then in `layouts/mine.json` change
 the `agents` block's content to `{ "mod": "herdr-agents" }`.
 
+### Set up on a new Mac with GitHub CLI
+
+Install GitHub CLI (`gh`) and Herdr.app, then launch Herdr.app once to create its configuration
+folder. Install Claude Code or Codex CLI if you want telemetry for that agent.
+
+```sh
+gh auth login
+mkdir -p ~/projects
+cd ~/projects
+gh repo clone evgenyt1/herdr-agents
+gh repo clone evgenyt1/agent-telemetry
+
+cd herdr-agents
+./install.sh
+herdr-app do mod.open --name herdr-agents
+```
+
+To open the overlay with Ctrl+Q, add `"ctrl-q": "mod.open:herdr-agents"` to the existing
+`"global"` object in `~/.config/herdr-app/keys.json` (or `$HERDR_APP_HOME/keys.json`).
+
+Install telemetry for the agents you use from the cloned marketplace:
+
+```sh
+# Claude Code
+claude plugin marketplace add "$HOME/projects/agent-telemetry"
+claude plugin install agent-telemetry@agent-telemetry
+
+# Codex CLI
+codex plugin marketplace add "$HOME/projects/agent-telemetry"
+codex plugin add agent-telemetry@agent-telemetry
+```
+
+In Codex, open `/hooks` and approve the agent-telemetry hooks. Start a new agent session
+in Herdr, send a prompt, then open the overlay and check the context reading. The plugins
+create fresh telemetry files on the new Mac.
+
 ## Telemetry
 
 Optional. The mod reads the files that agent-telemetry's plugins keep, one per live session,
